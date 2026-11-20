@@ -83,7 +83,7 @@ final class Proto {
     static final int P_S_CLOSE_WINDOW = 78;
     static final int P_S_HELD_SLOT = 79;
     static final int[] PROTOCOLS = {340, 764, 765, 766, 767, 768, 769, 770, 771, 772, 773, 774, 775};
-    static final String[] NAMES = {"S/n/o/w/ /B/l/o/c/k", "S/t/o/n/e/ /P/r/e/s/s/u/r/e/ /P/l/a/t/e", "P/o/l/i/s/h/e/d/ /B/l/a/c/k/s/t/o/n/e/ /P/r/e/s/s/u/r/e/ /P/l/a/t/e", "L/i/g/h/t/ /W/e/i/g/h/t/e/d/ /P/r/e/s/s/u/r/e/ /P/l/a/t/e", "H/e/a/v/y/ /W/e/i/g/h/t/e/d/ /P/r/e/s/s/u/r/e/ /P/l/a/t/e", "O/a/k/ /P/r/e/s/s/u/r/e/ /P/l/a/t/e", "S/p/r/u/c/e/ /P/r/e/s/s/u/r/e/ /P/l/a/t/e", "B/i/r/c/h/ /P/r/e/s/s/u/r/e/ /P/l/a/t/e", "J/u/n/g/l/e/ /P/r/e/s/s/u/r/e/ /P/l/a/t/e", "A/c/a/c/i/a/ /P/r/e/s/s/u/r/e/ /P/l/a/t/e", "C/h/e/r/r/y/ /P/r/e/s/s/u/r/e/ /P/l/a/t/e", "D/a/r/k/ /O/a/k/ /P/r/e/s/s/u/r/e/ /P/l/a/t/e", "P/a/l/e/ /O/a/k/ /P/r/e/s/s/u/r/e/ /P/l/a/t/e"};
+    static final String[] NAMES = {"1.12.2", "1.20.2", "1.20.3/1.20.4", "1.20.5/1.20.6", "1.21/1.21.1", "1.21.3", "1.21.4", "1.21.5", "1.21.6", "1.21.8", "1.21.9/1.21.10", "1.21.11", "26.1"};
     /** Entity type id of "minecraft:player" in spawn_entity (-1: uses a separate spawn packet). */
     static final int[] PLAYER_TYPE = {-1, 122, 124, 128, 128, 148, 147, 148, 149, 149, 151, 155, 155};
     /** Per version: one char per entity type id (p player, h hostile, a animal, i item, o other). */
