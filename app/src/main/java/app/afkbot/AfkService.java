@@ -7,7 +7,6 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
-import android.content.SharedPreferences;
 import android.net.wifi.WifiManager;
 import android.os.IBinder;
 import android.os.PowerManager;
@@ -41,17 +40,7 @@ public class AfkService extends Service {
         startForeground(NOTIF_ID, buildNotification("Starting..."));
         if (bot == null) {
             acquireLocks();
-            SharedPreferences p = getSharedPreferences("settings", MODE_PRIVATE);
-            Bot.Config c = new Bot.Config();
-            c.address = p.getString("address", "constantiam.net");
-            c.offline = p.getBoolean("offline", false);
-            c.offlineName = p.getString("offlineName", "AFKBot");
-            c.jumpSeconds = Math.max(2, p.getInt("jumpSeconds", 30));
-            c.autoReconnect = p.getBoolean("autoReconnect", true);
-            c.logoutHealth = p.getInt("logoutHearts", 5) * 2f;
-            c.logoutPlayerDistance = p.getInt("logoutPlayerDistance", 24);
-            c.safetyRejoinMinutes = p.getInt("safetyRejoinMinutes", 0);
-            c.autoRespawn = p.getBoolean("autoRespawn", true);
+            Bot.Config c = Settings.get(this);
             Hub.alertSink = new Hub.AlertSink() {
                 @Override
                 public void alert(String title, String text) {
@@ -77,6 +66,7 @@ public class AfkService extends Service {
                 }
             };
             Hub.running = true;
+            Hub.bot = bot;
             Hub.log("Starting AFK bot for " + c.address);
             bot.start();
             listener = new Hub.Listener() {
@@ -135,6 +125,7 @@ public class AfkService extends Service {
             bot = null;
             b.onExit = null;
             b.stop();
+            Hub.bot = null;
         }
         if (listener != null) {
             Hub.removeListener(listener);

@@ -36,6 +36,46 @@ final class Hub {
     static volatile String authUrl = null;
     static volatile String authError = null;
 
+    // Live stats for the dashboard
+    static volatile float statHealth = 20;
+    static volatile String statPos = "-", statUptime = "-", statNextAction = "-", statNearest = "none";
+    static volatile int statActions;
+    /** The running bot (for sending chat), or null. */
+    static volatile Bot bot;
+    static volatile Bot.Config config;
+
+    private static final LinkedList<String> CHAT = new LinkedList<String>();
+    static volatile int chatVersion;
+
+    static void chat(String msg) {
+        String line;
+        synchronized (TIME) {
+            line = TIME.format(new Date()) + "  " + msg;
+        }
+        synchronized (CHAT) {
+            CHAT.add(line);
+            while (CHAT.size() > 300) CHAT.removeFirst();
+        }
+        chatVersion++;
+        fire();
+    }
+
+    static String chatText() {
+        StringBuilder sb = new StringBuilder();
+        synchronized (CHAT) {
+            for (String s : CHAT) sb.append(s).append('\n');
+        }
+        return sb.toString();
+    }
+
+    /** Last few log lines, newest last. */
+    static java.util.List<String> recentLog(int n) {
+        synchronized (LOG) {
+            int from = Math.max(0, LOG.size() - n);
+            return new ArrayList<String>(LOG.subList(from, LOG.size()));
+        }
+    }
+
     static void log(String msg) {
         String line;
         synchronized (TIME) {

@@ -10,12 +10,19 @@ Get **AFKBot.apk** from the [latest release](../../releases/tag/latest) and open
 
 ## Features
 
-- Microsoft sign-in with a short code at microsoft.com/link (sign in once; it remembers you)
+- **Home**: live status, health, nearest player, uptime, position, anti-AFK counter, mini radar, recent activity
+- **Radar**: top-down view (north up) of players (with names), hostile mobs, animals and items; pinch to zoom,
+  filters, and a "Nearby" list with distance and direction. Draws only entity dots at 2 fps while visible, so it's light.
+- **Modules** (inspired by utility clients like Meteor):
+  - Anti-AFK: jump / spin / swing / sneak, optional random timing
+  - Auto Log: leave on low health or when a non-friend player gets close; optional auto-rejoin
+  - Visual Range: alert when a player comes into view
+  - Auto Respawn, Auto Reconnect, Friends list
+- **Chat**: read server and player chat; send messages and /commands
+- **Alerts**: phone notifications for kicks, disconnects, deaths, players nearby and safety logouts
+- Microsoft sign-in with a short code at microsoft.com/link (remembers you)
 - Supports Minecraft 1.12.2 and 1.20.2 - 26.1 (auto-detects the server version)
-- Jumps on a timer (default 30 s), looks around a little, swings its arm
-- Auto-respawns, auto-reconnects, accepts server resource packs without downloading them
-- Runs as a foreground service with a notification so it keeps going with the screen off
-- Offline/cracked server mode with a chosen username
+- Runs as a foreground service so it keeps going with the screen off
 
 ## Build
 
