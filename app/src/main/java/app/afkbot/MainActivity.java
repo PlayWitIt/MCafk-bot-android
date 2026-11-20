@@ -86,6 +86,10 @@ public class MainActivity extends Activity implements Hub.Listener {
             if (tab == T_3D) {
                 if (view3d != null) view3d.tick();
                 if (view3d == null && cfg.view3d && World.inWorld) update3dLifecycle();
+                if (view3d != null && TextureStore.current == null && !texturesOffByUser) {
+                    if (Hub.versionName != null && TextureStore.have(MainActivity.this, Hub.versionName)) TextureStore.load(MainActivity.this, Hub.versionName);
+                    else autoDownloadTextures();
+                }
                 info3d.setVisibility(view3d == null || !World.inWorld ? View.VISIBLE : View.GONE);
                 if (Inv.version != shownInvVersion) refreshContainer();
                 if (Inv.version != shownHotbar || (hotbar != null && hotbar.getChildCount() == 0 && World.inWorld)) refreshHotbar();
@@ -676,14 +680,13 @@ public class MainActivity extends Activity implements Hub.Listener {
         }
         card3d = c;
         LinearLayout acts = chipRow(c);
-        final TextView driveChip = text("✥ Drive", 13, TEXT, true);
+        driveChip = text("✥ Drive", 13, TEXT, true);
         driveChip.setPadding(dp(14), dp(8), dp(14), dp(8));
         acts.addView(driveChip);
         styleChip(driveChip, GOOD, false);
         driveChip.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
                 setDrive(!drive);
-                styleChip(driveChip, GOOD, drive);
             }
         });
         TextView sp = text(" ", 13, TEXT, false);
@@ -836,9 +839,9 @@ public class MainActivity extends Activity implements Hub.Listener {
         containerList = new LinearLayout(this);
         containerList.setOrientation(LinearLayout.VERTICAL);
         cs.addView(containerList);
-        containerPanel.addView(cs, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(220)));
-        FrameLayout.LayoutParams pl = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM);
-        pl.setMargins(dp(8), 0, dp(8), dp(8));
+        containerPanel.addView(cs, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(190)));
+        FrameLayout.LayoutParams pl = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP);
+        pl.setMargins(dp(8), dp(60), dp(8), 0); // below the selection bar, above the joystick
         holder3d.addView(containerPanel, pl);
         containerPanel.setVisibility(View.GONE);
         return col;
@@ -871,8 +874,12 @@ public class MainActivity extends Activity implements Hub.Listener {
         return b;
     }
 
+    private TextView driveChip;
+
     private void setDrive(boolean on) {
+        boolean was = drive;
         drive = on;
+        if (driveChip != null) styleChip(driveChip, GOOD, on);
         Bot b = Hub.bot;
         if (b != null) {
             if (on) {
@@ -890,7 +897,7 @@ public class MainActivity extends Activity implements Hub.Listener {
         if (on && !World.inWorld) toast("Start AFK first");
         if (driveControls != null) driveControls.setVisibility(on && view3d != null ? View.VISIBLE : View.GONE);
         if (view3d != null) view3d.setContinuous(on);
-        if (on) Hub.log("Drive mode on - anti-AFK pauses while you control the player");
+        if (on && !was) Hub.log("Drive mode on - anti-AFK pauses while you control the player");
     }
 
     private void takeAll() {
@@ -965,6 +972,7 @@ public class MainActivity extends Activity implements Hub.Listener {
         boolean want = cfg.view3d && tab == T_3D && resumed;
         if (want && view3d == null) {
             if (Hub.versionName != null && TextureStore.current == null && TextureStore.have(this, Hub.versionName) && !texturesOffByUser) TextureStore.load(this, Hub.versionName);
+            else autoDownloadTextures();
             view3d = new World3DView(this);
             view3d.radius = radius3d;
             view3d.firstPerson = firstPerson3d;
@@ -1011,7 +1019,12 @@ public class MainActivity extends Activity implements Hub.Listener {
             view3d.onPause();
             holder3d.removeView(view3d);
             view3d = null;
-            if (drive && tab != T_3D) setDrive(false);
+            Bot pb = Hub.bot;
+            if (pb != null) {
+                pb.inForward = pb.inStrafe = 0;
+                pb.inJump = false;
+                pb.manual = false; // paused while the 3D view isn't open; resumes when you come back
+            }
         }
         overlay.crosshair = view3d != null && firstPerson3d;
         boolean showInfo = view3d == null || !World.inWorld;
@@ -1174,6 +1187,36 @@ public class MainActivity extends Activity implements Hub.Listener {
         boolean on = TextureStore.current != null;
         texChip.setText(TextureStore.busy ? "Textures: downloading..." : on ? "Textures: on" : have ? "Textures: off" : "Get textures");
         styleChip(texChip, ACCENT2, on);
+    }
+
+    private boolean autoTried;
+
+    /** Gets the real game textures automatically the first time (about 1.2 MB, straight from Mojang). */
+    private void autoDownloadTextures() {
+        final String v = Hub.versionName;
+        final ProtoDef.VersionData vd = Hub.versionData;
+        if (autoTried || texturesOffByUser || v == null || vd == null || TextureStore.busy || TextureStore.have(this, v)) return;
+        autoTried = true;
+        final android.content.Context app = getApplicationContext();
+        Hub.log("Downloading Minecraft " + v + " block textures from Mojang (about 1.2 MB, one time)...");
+        new Thread(new Runnable() {
+            public void run() {
+                try {
+                    TextureStore.download(app, v, vd.blockIds);
+                    Hub.log("Textures ready - the 3D view now uses the game's real textures");
+                } catch (Exception e) {
+                    TextureStore.status = "Texture download failed: " + e.getMessage();
+                    Hub.log(TextureStore.status + " (tap the Textures chip to retry)");
+                    autoTried = false;
+                }
+                ui.post(new Runnable() {
+                    public void run() {
+                        updateTexChip();
+                    }
+                });
+            }
+        }, "textures").start();
+        updateTexChip();
     }
 
     private void texturesClicked() {
