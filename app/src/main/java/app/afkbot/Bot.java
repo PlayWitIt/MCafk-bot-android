@@ -857,7 +857,17 @@ final class Bot {
             Object desc = j.opt("description");
             String motd = desc == null ? "" : Text.strip(desc instanceof String ? (String) desc : Text.fromJson(desc.toString())).replace('\n', ' ').trim();
             Hub.log("Server found: " + vn + " (protocol " + sp + "), players " + players + (motd.isEmpty() ? "" : " - " + motd));
-            if (sp < 0) throw new IOException("server did not report its version");
+            if (sp <= 0) {
+                // Some servers (proxies / multi-version plugins) send protocol -1; read the version from its name instead.
+                int guess = protocolFromName(vn);
+                if (guess > 0) {
+                    Hub.log("Server didn't give a protocol number; using " + guess + " from its version name \"" + vn + "\"");
+                    sp = guess;
+                } else {
+                    sp = Proto.PROTOCOLS[Proto.PROTOCOLS.length - 1];
+                    Hub.log("Server didn't give a protocol number; trying " + Proto.NAMES[Proto.PROTOCOLS.length - 1]);
+                }
+            }
             return sp;
         } finally {
             try {
@@ -869,7 +879,28 @@ final class Bot {
         }
     }
 
-    private static String[] srvLookup(String host) {
+    /** Finds the best-matching known version (e.g. "1.21.11") inside a server's version name. */
+    static int protocolFromName(String name) {
+        int best = -1, bestLen = 0;
+        for (int i = 0; i < Proto.NAMES.length; i++) {
+            for (String v : Proto.NAMES[i].split("/")) {
+                int at = name.indexOf(v);
+                while (at >= 0) {
+                    int end = at + v.length();
+                    boolean startOk = at == 0 || !Character.isDigit(name.charAt(at - 1)) && name.charAt(at - 1) != '.';
+                    boolean endOk = end >= name.length() || !Character.isDigit(name.charAt(end)) && !(name.charAt(end) == '.' && end + 1 < name.length() && Character.isDigit(name.charAt(end + 1)));
+                    if (startOk && endOk && v.length() > bestLen) {
+                        best = Proto.PROTOCOLS[i];
+                        bestLen = v.length();
+                    }
+                    at = name.indexOf(v, at + 1);
+                }
+            }
+        }
+        return best;
+    }
+
+        private static String[] srvLookup(String host) {
         return resolveSrv("_minecraft._tcp." + host, 0);
     }
 
