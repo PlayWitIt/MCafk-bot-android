@@ -3,3 +3,7 @@ build/
 local.properties
 *.iml
 .idea/
+desktop/lib/
+desktop/build/
+desktop/state/
+desktop/realsrv/

@@ -2200,6 +2200,8 @@ final class Bot {
     private final int[] sentIds = new int[48];
     private int sentPos;
     private final Object sentLock = new Object();
+    /** Desktop debugging: print every packet sent (id + size). */
+    static volatile boolean traceSent;
 
     private static final int[] SENT_KEYS = {Proto.P_S_USE_ITEM_ON, Proto.P_S_WINDOW_CLICK, Proto.P_S_CLOSE_WINDOW,
             Proto.P_S_SWING, Proto.P_S_POSITION, Proto.P_S_POSITION_LOOK, Proto.P_S_LOOK, Proto.P_S_PLAYER_INPUT,
@@ -2239,6 +2241,7 @@ final class Bot {
                 do { c = body[i++] & 255; pid |= (c & 127) << shift; shift += 7; } while ((c & 128) != 0 && i < body.length && i < 3);
                 sentIds[sentPos] = pid + 1;
                 sentPos = (sentPos + 1) % sentIds.length;
+                if (traceSent && pid != id(Proto.P_S_TICK_END)) System.out.println("[SENT] 0x" + Integer.toHexString(pid) + " " + body.length + "b");
             }
         }
         byte[] frame;
