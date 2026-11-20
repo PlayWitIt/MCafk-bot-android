@@ -34,6 +34,7 @@ final class Hub {
     // Sign-in screen state
     static volatile String authCode = null;
     static volatile String authUrl = null;
+    static volatile String authError = null;
 
     static void log(String msg) {
         String line;

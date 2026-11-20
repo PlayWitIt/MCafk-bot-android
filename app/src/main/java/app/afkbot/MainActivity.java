@@ -227,7 +227,20 @@ public class MainActivity extends Activity implements Hub.Listener {
 
         String name = Auth.signedInName(this);
         boolean signing = signInThread != null;
-        account.setText(name != null ? "Signed in as " + name : signing ? "Waiting for you to sign in..." : "Not signed in");
+        String err = Hub.authError;
+        if (name != null) {
+            account.setText("Signed in as " + name);
+            account.setTextColor(Hub.GREEN);
+        } else if (signing) {
+            account.setText(Hub.authCode == null ? "Finishing sign-in..." : "Waiting for you to sign in...");
+            account.setTextColor(FG);
+        } else if (err != null) {
+            account.setText("Sign-in failed: " + err + "\n\nTap \"Copy log\" below and send it to get help.");
+            account.setTextColor(Hub.RED);
+        } else {
+            account.setText("Not signed in");
+            account.setTextColor(FG);
+        }
         signIn.setText(signing ? "Cancel sign-in" : name != null ? "Switch account" : "Sign in with Microsoft");
         signOut.setVisibility(name != null && !signing ? View.VISIBLE : View.GONE);
         String code = Hub.authCode;
@@ -278,6 +291,7 @@ public class MainActivity extends Activity implements Hub.Listener {
 
     private void startSignIn() {
         cancelSignIn = false;
+        Hub.authError = null;
         Hub.log("Starting Microsoft sign-in...");
         final android.content.Context ctx = getApplicationContext();
         Thread t = new Thread(new Runnable() {
@@ -291,7 +305,9 @@ public class MainActivity extends Activity implements Hub.Listener {
                         }
                     });
                 } catch (Exception e) {
-                    Hub.log("Sign-in failed: " + e.getMessage());
+                    String m = e.getMessage() != null ? e.getMessage() : e.toString();
+                    Hub.authError = m;
+                    Hub.log("Sign-in failed: " + m);
                 } finally {
                     signInThread = null;
                     Hub.fire();

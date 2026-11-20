@@ -12,6 +12,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.math.BigInteger;
+import java.net.CookieHandler;
+import java.net.CookieManager;
+import java.net.CookiePolicy;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
@@ -30,6 +33,11 @@ import java.util.UUID;
  */
 final class Auth {
     private Auth() {
+    }
+
+    static {
+        // login.live.com sets a cookie on the device-code request and expects it back while polling.
+        if (CookieHandler.getDefault() == null) CookieHandler.setDefault(new CookieManager(null, CookiePolicy.ACCEPT_ALL));
     }
 
     // Same public client + scope used by the popular open-source bot library (Minecraft for Nintendo Switch title).
@@ -63,7 +71,8 @@ final class Auth {
 
     static String signedInName(Context c) {
         SharedPreferences p = prefs(c);
-        return p.getString("msa_refresh", null) == null ? null : p.getString("mc_name", "?");
+        if (p.getString("msa_refresh", null) == null) return null;
+        return p.getString("mc_name", null);
     }
 
     static void signOut(Context c) {
@@ -90,7 +99,7 @@ final class Auth {
                 Resp r = request("POST", "https://login.live.com/oauth20_token.srf?client_id=" + CLIENT_ID, form(
                         "client_id", CLIENT_ID, "device_code", deviceCode,
                         "grant_type", "urn:ietf:params:oauth:grant-type:device_code"), "application/x-www-form-urlencoded", null);
-                JSONObject j = new JSONObject(r.body);
+                JSONObject j = json(r, "Microsoft (checking the code)");
                 if (j.has("error")) {
                     String e = j.getString("error");
                     if (e.equals("authorization_pending")) continue;
@@ -100,8 +109,10 @@ final class Auth {
                     }
                     throw new AuthException("Microsoft sign-in failed: " + j.optString("error_description", e));
                 }
+                if (!j.has("access_token")) throw new AuthException("Microsoft replied without a token (HTTP " + r.code + ")");
                 Hub.authCode = null;
-                Hub.log("Microsoft account accepted, getting Minecraft profile...");
+                Hub.log("Step 1/4 OK: Microsoft account accepted");
+                Hub.fire();
                 return finish(c, j);
             }
             throw new AuthException("Sign-in code expired, try again");
@@ -124,7 +135,7 @@ final class Auth {
         Resp r = request("POST", "https://login.live.com/oauth20_token.srf", form(
                 "client_id", CLIENT_ID, "scope", SCOPE, "grant_type", "refresh_token", "refresh_token", refresh),
                 "application/x-www-form-urlencoded", null);
-        JSONObject j = new JSONObject(r.body);
+        JSONObject j = json(r, "Microsoft (refresh)");
         if (j.has("error") || r.code != 200) {
             String e = j.optString("error_description", j.optString("error", "HTTP " + r.code));
             if (r.code == 400 || r.code == 401) {
@@ -142,15 +153,19 @@ final class Auth {
         if (newRefresh != null) prefs(c).edit().putString("msa_refresh", newRefresh).apply();
 
         String[] xsts = xboxXsts(msaToken);
-        JSONObject mc = new JSONObject(post("https://api.minecraftservices.com/authentication/login_with_xbox",
-                new JSONObject().put("identityToken", "XBL3.0 x=" + xsts[0] + ";" + xsts[1]).toString(), "application/json", null));
+        Hub.log("Step 2/4 OK: Xbox Live");
+        Resp mr = request("POST", "https://api.minecraftservices.com/authentication/login_with_xbox",
+                new JSONObject().put("identityToken", "XBL3.0 x=" + xsts[0] + ";" + xsts[1]).toString(), "application/json", null);
+        if (mr.code != 200) throw new AuthException("Minecraft login failed (HTTP " + mr.code + "): " + shorten(mr.body));
+        JSONObject mc = json(mr, "Minecraft login");
         String mcToken = mc.getString("access_token");
+        Hub.log("Step 3/4 OK: Minecraft services");
         long expiresIn = mc.optLong("expires_in", 86400);
 
         Resp pr = request("GET", "https://api.minecraftservices.com/minecraft/profile", null, null, mcToken);
         if (pr.code == 404)
             throw new AuthException("This Microsoft account doesn't own Minecraft: Java Edition (no profile found).");
-        if (pr.code != 200) throw new IOException("Profile request failed: HTTP " + pr.code + " " + pr.body);
+        if (pr.code != 200) throw new AuthException("Minecraft profile request failed (HTTP " + pr.code + "): " + shorten(pr.body));
         JSONObject prof = new JSONObject(pr.body);
         String name = prof.getString("name");
         String id = prof.getString("id");
@@ -160,7 +175,8 @@ final class Auth {
                 .putString("mc_name", name)
                 .putString("mc_uuid", id)
                 .apply();
-        Hub.log("Signed in as " + name);
+        Hub.log("Step 4/4 OK: signed in as " + name);
+        Hub.authError = null;
         return new Session(name, id, mcToken);
     }
 
@@ -184,7 +200,12 @@ final class Auth {
                         .put("AuthMethod", "RPS")
                         .put("SiteName", "user.auth.xboxlive.com")
                         .put("RpsTicket", "t=" + msaToken));
-        String userToken = new JSONObject(xbl("https://user.auth.xboxlive.com/user/authenticate", user, "2")).getString("Token");
+        String userToken;
+        try {
+            userToken = new JSONObject(xbl("https://user.auth.xboxlive.com/user/authenticate", user, "2")).getString("Token");
+        } catch (Exception e) {
+            throw new AuthException("Xbox Live sign-in failed: " + e.getMessage());
+        }
 
         String deviceToken = null, titleToken = null;
         try {
@@ -252,8 +273,22 @@ final class Auth {
 
     private static String xbl(String url, JSONObject body, String contract) throws Exception {
         Resp r = xblRaw(url, body, contract);
-        if (r.code != 200) throw new IOException(new URL(url).getHost() + " returned HTTP " + r.code + " " + r.body);
+        if (r.code != 200) throw new IOException(new URL(url).getHost() + " returned HTTP " + r.code + " " + shorten(r.body));
         return r.body;
+    }
+
+    private static JSONObject json(Resp r, String what) throws AuthException {
+        try {
+            return new JSONObject(r.body);
+        } catch (Exception e) {
+            throw new AuthException(what + " gave an unexpected reply (HTTP " + r.code + "): " + shorten(r.body));
+        }
+    }
+
+    static String shorten(String s) {
+        if (s == null) return "";
+        s = s.replace('\n', ' ').trim();
+        return s.length() > 300 ? s.substring(0, 300) + "..." : s;
     }
 
     private static Resp xblRaw(String url, JSONObject body, String contract) throws Exception {
