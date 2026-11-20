@@ -51,6 +51,21 @@ final class Bot {
         String offlineName = "AFKBot";
         int jumpSeconds = 30;
         boolean autoReconnect = true;
+        /** Log out when health (0-20) drops below this. 0 = off. */
+        float logoutHealth = 10;
+        /** Log out when another player is within this many blocks. 0 = off. */
+        int logoutPlayerDistance = 24;
+        /** After a safety logout, rejoin after this many minutes. 0 = stay offline. */
+        int safetyRejoinMinutes = 0;
+        /** Respawn automatically after dying (otherwise log out). */
+        boolean autoRespawn = true;
+    }
+
+    /** We left on purpose to stay safe (low health, player nearby, died). */
+    static final class SafetyLogout extends IOException {
+        SafetyLogout(String m) {
+            super(m);
+        }
     }
 
     /** Disconnect reason sent by the server. */
@@ -80,6 +95,11 @@ final class Bot {
     // --- per-connection state ---
     private int proto;
     private int[] ids;
+    private int playerType = -1;
+    private int selfEntityId = Integer.MIN_VALUE;
+    /** Other players we can see: entity id -> {x, y, z}. Only touched on the network thread. */
+    private final java.util.HashMap<Integer, double[]> players = new java.util.HashMap<Integer, double[]>();
+    private volatile double nearestPlayer = -1;
     private volatile int state;
     private int threshold = -1;
     private Cipher encrypt, decrypt;
@@ -145,22 +165,44 @@ final class Bot {
             } catch (Fatal f) {
                 Hub.log("Stopped: " + f.getMessage());
                 Hub.status("Error: " + f.getMessage(), Hub.RED);
+                Hub.alert("AFK Bot stopped", f.getMessage());
                 break;
             } catch (Auth.AuthException a) {
                 Hub.log("Login problem: " + a.getMessage());
                 if (a.getMessage() != null && a.getMessage().toLowerCase(Locale.US).contains("sign in")) {
                     Hub.status(a.getMessage(), Hub.RED);
+                    Hub.alert("AFK Bot stopped", a.getMessage());
                     break;
                 }
+            } catch (SafetyLogout s) {
+                Hub.log("SAFETY LOGOUT: " + s.getMessage());
+                Hub.alert("Logged out for safety", s.getMessage());
+                cleanup();
+                if (cfg.safetyRejoinMinutes <= 0) {
+                    Hub.status("Logged out for safety: " + s.getMessage(), Hub.RED);
+                    break;
+                }
+                for (int i = cfg.safetyRejoinMinutes * 60; i > 0 && !stopped; i--) {
+                    Hub.status("Safety logout (" + s.getMessage() + "). Rejoining in " + duration(i), Hub.YELLOW);
+                    try {
+                        Thread.sleep(1000);
+                    } catch (InterruptedException ie) {
+                        break;
+                    }
+                }
+                failures = 0;
+                continue;
             } catch (Kick k) {
                 Hub.log("Kicked: " + k.getMessage());
                 Hub.status("Kicked: " + firstLine(k.getMessage()), Hub.RED);
+                Hub.alert("Kicked from " + serverLabel, firstLine(k.getMessage()));
             } catch (Exception e) {
                 if (!stopped) {
                     String m = e instanceof SocketTimeoutException ? "server stopped responding (timed out)"
                             : e instanceof EOFException ? "server closed the connection" : String.valueOf(e.getMessage());
                     Hub.log("Disconnected: " + m);
                     Hub.status("Disconnected", Hub.RED);
+                    if (joinedAt > 0) Hub.alert("Disconnected from " + serverLabel, m + (cfg.autoReconnect ? " - reconnecting" : ""));
                 }
             } finally {
                 playStart = joinedAt;
@@ -219,6 +261,9 @@ final class Bot {
             respawnPending = false;
             joinedAt = 0;
         }
+        players.clear();
+        nearestPlayer = -1;
+        selfEntityId = Integer.MIN_VALUE;
         encrypt = decrypt = null;
         threshold = -1;
         state = HANDSHAKE;
@@ -303,6 +348,7 @@ final class Bot {
             proto = serverProto;
         }
         ids = Proto.IDS[idx];
+        playerType = Proto.PLAYER_TYPE[idx];
 
         if (cfg.offline) {
             String n = cfg.offlineName.trim();
@@ -513,6 +559,8 @@ final class Bot {
         } else if (pid == id(Proto.P_C_POSITION)) {
             onTeleport(p);
         } else if (pid == id(Proto.P_C_LOGIN)) {
+            selfEntityId = p.i32();
+            players.clear();
             synchronized (this) {
                 if (joinedAt == 0) joinedAt = System.currentTimeMillis();
             }
@@ -539,7 +587,14 @@ final class Bot {
                 health = h;
                 if (h > 0) respawnPending = false;
             }
+            if (h > 0 && cfg.logoutHealth > 0 && h < cfg.logoutHealth) {
+                throw new SafetyLogout(String.format(Locale.US, "health dropped to %.1f/20 (%.1f hearts) at %s", h, h / 2, posText()));
+            }
+            if (died && !cfg.autoRespawn) {
+                throw new SafetyLogout("you died at " + posText() + " (auto-respawn is off)");
+            }
             if (died) {
+                Hub.alert("You died", "Died at " + posText() + " - respawning");
                 Hub.log("You died - respawning automatically");
                 synchronized (this) {
                     respawnPending = true;
@@ -562,11 +617,82 @@ final class Bot {
                 if (msg.length() > 300) msg = msg.substring(0, 300) + "...";
                 Hub.log("[Chat] " + msg);
             }
+        } else if (cfg.logoutPlayerDistance > 0 && handleEntity(pid, p)) {
+            // handled
         } else if (pid == id(Proto.P_C_RESOURCE_PACK)) {
             answerResourcePack(p, id(Proto.P_S_RESOURCE_PACK));
         } else if (pid == id(Proto.P_C_COOKIE_REQ)) {
             send(new Buf(id(Proto.P_S_COOKIE_RESP)).str(p.str()).bool(false));
         }
+    }
+
+    // ----- other players (for the "player nearby" safety logout) -----
+
+    private boolean handleEntity(int pid, Buf.In p) throws IOException {
+        if (pid == id(Proto.P_C_SPAWN_ENTITY) || pid == id(Proto.P_C_SPAWN_PLAYER)) {
+            int eid = p.varInt();
+            p.uuid();
+            boolean isPlayer = pid == id(Proto.P_C_SPAWN_PLAYER) || p.varInt() == playerType;
+            if (!isPlayer || eid == selfEntityId) return true;
+            double[] pos = {p.f64(), p.f64(), p.f64()};
+            players.put(eid, pos);
+            checkPlayers();
+        } else if (pid == id(Proto.P_C_ENTITY_DESTROY)) {
+            int n = p.varInt();
+            for (int i = 0; i < n; i++) players.remove(p.varInt());
+            updateNearest();
+        } else if (pid == id(Proto.P_C_REL_MOVE) || pid == id(Proto.P_C_MOVE_LOOK)) {
+            double[] pos = players.get(p.varInt());
+            if (pos == null) return true;
+            pos[0] += (short) p.u16() / 4096.0;
+            pos[1] += (short) p.u16() / 4096.0;
+            pos[2] += (short) p.u16() / 4096.0;
+            checkPlayers();
+        } else if (pid == id(Proto.P_C_ENTITY_TELEPORT) || pid == id(Proto.P_C_ENTITY_SYNC)) {
+            double[] pos = players.get(p.varInt());
+            if (pos == null) return true;
+            pos[0] = p.f64();
+            pos[1] = p.f64();
+            pos[2] = p.f64();
+            checkPlayers();
+        } else if (pid == id(Proto.P_C_RESPAWN)) {
+            players.clear(); // changed world
+            nearestPlayer = -1;
+            return false;
+        } else {
+            return false;
+        }
+        return true;
+    }
+
+    private void updateNearest() {
+        double best = -1, mx, my, mz;
+        synchronized (this) {
+            if (!havePos) {
+                nearestPlayer = -1;
+                return;
+            }
+            mx = x;
+            my = groundY;
+            mz = z;
+        }
+        for (double[] q : players.values()) {
+            double d = Math.sqrt((q[0] - mx) * (q[0] - mx) + (q[1] - my) * (q[1] - my) + (q[2] - mz) * (q[2] - mz));
+            if (best < 0 || d < best) best = d;
+        }
+        nearestPlayer = best;
+    }
+
+    private void checkPlayers() throws SafetyLogout {
+        updateNearest();
+        double d = nearestPlayer;
+        if (d >= 0 && cfg.logoutPlayerDistance > 0 && d <= cfg.logoutPlayerDistance) {
+            throw new SafetyLogout(String.format(Locale.US, "a player came within %.0f blocks of you at %s", d, posText()));
+        }
+    }
+
+    private synchronized String posText() {
+        return String.format(Locale.US, "%.0f, %.0f, %.0f", x, groundY, z);
     }
 
     private void onTeleport(Buf.In p) throws IOException {
@@ -608,6 +734,7 @@ final class Bot {
         }
         send(new Buf(id(Proto.P_S_TELEPORT_CONFIRM)).varInt(tid));
         sendMove(true, true, false);
+        if (cfg.logoutPlayerDistance > 0) checkPlayers();
         if (first) {
             if (!loadedSent && id(Proto.P_S_PLAYER_LOADED) >= 0) {
                 send(new Buf(id(Proto.P_S_PLAYER_LOADED)));
@@ -684,6 +811,10 @@ final class Bot {
             long up = joinedAt > 0 ? (System.currentTimeMillis() - joinedAt) / 1000 : 0;
             d = String.format(Locale.US, "Position %.1f, %.1f, %.1f\nHealth %.0f/20  •  Jumps %d  •  Next jump in %ds\nOnline for %s",
                     x, groundY, z, health, jumps, left, duration(up));
+            if (cfg.logoutPlayerDistance > 0) {
+                double np = nearestPlayer;
+                d += np < 0 ? "  •  No players in sight" : String.format(Locale.US, "  •  Nearest player %.0f blocks", np);
+            }
         }
         Hub.detail(d);
     }
@@ -792,7 +923,10 @@ final class Bot {
         return pid == id(Proto.P_C_KEEPALIVE) || pid == id(Proto.P_C_PING) || pid == id(Proto.P_C_POSITION)
                 || pid == id(Proto.P_C_LOGIN) || pid == id(Proto.P_C_DISCONNECT) || pid == id(Proto.P_C_START_CONFIG)
                 || pid == id(Proto.P_C_HEALTH) || pid == id(Proto.P_C_SYSTEM_CHAT) || pid == id(Proto.P_C_RESOURCE_PACK)
-                || pid == id(Proto.P_C_COOKIE_REQ);
+                || pid == id(Proto.P_C_COOKIE_REQ)
+                || (cfg.logoutPlayerDistance > 0 && (pid == id(Proto.P_C_SPAWN_ENTITY) || pid == id(Proto.P_C_SPAWN_PLAYER)
+                || pid == id(Proto.P_C_ENTITY_DESTROY) || pid == id(Proto.P_C_REL_MOVE) || pid == id(Proto.P_C_MOVE_LOOK)
+                || pid == id(Proto.P_C_ENTITY_TELEPORT) || pid == id(Proto.P_C_ENTITY_SYNC) || pid == id(Proto.P_C_RESPAWN)));
     }
 
     /** Input stream that starts decrypting once a cipher is set. */

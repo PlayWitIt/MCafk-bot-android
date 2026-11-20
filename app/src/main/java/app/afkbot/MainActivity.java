@@ -33,8 +33,8 @@ public class MainActivity extends Activity implements Hub.Listener {
 
     private TextView account, codeBox, status, detail, log;
     private Button signIn, signOut, startStop, openLink, copyCode, battery;
-    private EditText address, jumpSecs, offlineName;
-    private CheckBox offline, reconnect;
+    private EditText address, jumpSecs, offlineName, logoutHearts, logoutDistance, rejoinMinutes;
+    private CheckBox offline, reconnect, autoRespawn;
     private ScrollView logScroll;
     private volatile Thread signInThread;
     private volatile boolean cancelSignIn;
@@ -181,6 +181,24 @@ public class MainActivity extends Activity implements Hub.Listener {
                 offlineName.setVisibility(offline.isChecked() ? View.VISIBLE : View.GONE);
             }
         });
+        // --- Safety card
+        LinearLayout sf = card(col);
+        TextView st = text("Safety (auto logout)", 16, FG);
+        st.setTypeface(Typeface.DEFAULT_BOLD);
+        sf.addView(st);
+        sf.addView(text("You get a phone alert whenever it is kicked, disconnected, dies or logs out for safety.", 13, DIM));
+        sf.addView(label("Log out if health drops below (hearts, 0 = off)"));
+        logoutHearts = edit("5", InputType.TYPE_CLASS_NUMBER);
+        sf.addView(logoutHearts);
+        sf.addView(label("Log out if another player comes within (blocks, 0 = off)"));
+        logoutDistance = edit("24", InputType.TYPE_CLASS_NUMBER);
+        sf.addView(logoutDistance);
+        sf.addView(label("After a safety logout, rejoin after (minutes, 0 = stay offline)"));
+        rejoinMinutes = edit("0", InputType.TYPE_CLASS_NUMBER);
+        sf.addView(rejoinMinutes);
+        autoRespawn = check("Respawn automatically after dying (off = log out instead)");
+        sf.addView(autoRespawn);
+
         battery = button("Let it run in the background (battery settings)");
         battery.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -341,6 +359,18 @@ public class MainActivity extends Activity implements Hub.Listener {
         reconnect.setChecked(p.getBoolean("autoReconnect", true));
         offline.setChecked(p.getBoolean("offline", false));
         offlineName.setText(p.getString("offlineName", ""));
+        logoutHearts.setText(String.valueOf(p.getInt("logoutHearts", 5)));
+        logoutDistance.setText(String.valueOf(p.getInt("logoutPlayerDistance", 24)));
+        rejoinMinutes.setText(String.valueOf(p.getInt("safetyRejoinMinutes", 0)));
+        autoRespawn.setChecked(p.getBoolean("autoRespawn", true));
+    }
+
+    private static int num(EditText e, int def, int min, int max) {
+        try {
+            return Math.max(min, Math.min(max, Integer.parseInt(e.getText().toString().trim())));
+        } catch (NumberFormatException ex) {
+            return def;
+        }
     }
 
     private void saveSettings() {
@@ -355,6 +385,10 @@ public class MainActivity extends Activity implements Hub.Listener {
                 .putBoolean("autoReconnect", reconnect.isChecked())
                 .putBoolean("offline", offline.isChecked())
                 .putString("offlineName", offlineName.getText().toString().trim())
+                .putInt("logoutHearts", num(logoutHearts, 5, 0, 10))
+                .putInt("logoutPlayerDistance", num(logoutDistance, 24, 0, 256))
+                .putInt("safetyRejoinMinutes", num(rejoinMinutes, 0, 0, 1440))
+                .putBoolean("autoRespawn", autoRespawn.isChecked())
                 .apply();
     }
 

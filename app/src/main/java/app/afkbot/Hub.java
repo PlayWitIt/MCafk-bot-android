@@ -80,6 +80,18 @@ final class Hub {
         }
     }
 
+    interface AlertSink {
+        void alert(String title, String text);
+    }
+
+    /** Set by the service; shows a phone notification for important events. */
+    static volatile AlertSink alertSink;
+
+    static void alert(String title, String text) {
+        AlertSink a = alertSink;
+        if (a != null) a.alert(title, text);
+    }
+
     static void post(Runnable r) {
         MAIN.post(r);
     }

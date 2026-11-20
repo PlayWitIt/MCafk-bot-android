@@ -48,6 +48,16 @@ public class AfkService extends Service {
             c.offlineName = p.getString("offlineName", "AFKBot");
             c.jumpSeconds = Math.max(2, p.getInt("jumpSeconds", 30));
             c.autoReconnect = p.getBoolean("autoReconnect", true);
+            c.logoutHealth = p.getInt("logoutHearts", 5) * 2f;
+            c.logoutPlayerDistance = p.getInt("logoutPlayerDistance", 24);
+            c.safetyRejoinMinutes = p.getInt("safetyRejoinMinutes", 0);
+            c.autoRespawn = p.getBoolean("autoRespawn", true);
+            Hub.alertSink = new Hub.AlertSink() {
+                @Override
+                public void alert(String title, String text) {
+                    postAlert(title, text);
+                }
+            };
             final Context ctx = getApplicationContext();
             bot = new Bot(c, new Bot.SessionSource() {
                 @Override
@@ -78,6 +88,45 @@ public class AfkService extends Service {
             Hub.addListener(listener);
         }
         return START_NOT_STICKY;
+    }
+
+    private static final String ALERT_CHANNEL = "alerts";
+    private int alertId = 100;
+    private String lastAlert = "";
+    private long lastAlertAt = 0;
+
+    /** Heads-up notification for kicks, disconnects, deaths and safety logouts. */
+    private void postAlert(final String title, final String text) {
+        Hub.post(new Runnable() {
+            @Override
+            public void run() {
+                String key = title + "|" + text;
+                long now = System.currentTimeMillis();
+                if (key.equals(lastAlert) && now - lastAlertAt < 10 * 60 * 1000L) return; // no spam while reconnecting
+                lastAlert = key;
+                lastAlertAt = now;
+                NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+                if (nm.getNotificationChannel(ALERT_CHANNEL) == null) {
+                    NotificationChannel ch = new NotificationChannel(ALERT_CHANNEL, "Kicks, deaths and safety logouts", NotificationManager.IMPORTANCE_HIGH);
+                    ch.setDescription("Tells you when the bot is kicked, disconnected, dies or logs out for safety");
+                    ch.enableVibration(true);
+                    nm.createNotificationChannel(ch);
+                }
+                Intent open = new Intent(AfkService.this, MainActivity.class);
+                open.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                PendingIntent pi = PendingIntent.getActivity(AfkService.this, 2, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+                Notification n = new Notification.Builder(AfkService.this, ALERT_CHANNEL)
+                        .setSmallIcon(android.R.drawable.stat_notify_error)
+                        .setContentTitle(title)
+                        .setContentText(text)
+                        .setStyle(new Notification.BigTextStyle().bigText(text))
+                        .setAutoCancel(true)
+                        .setContentIntent(pi)
+                        .setCategory(Notification.CATEGORY_ALARM)
+                        .build();
+                nm.notify(alertId++, n);
+            }
+        });
     }
 
     private void shutdown() {
