@@ -50,6 +50,8 @@ final class Hub {
     static volatile VersionLoader versionLoader;
     /** Data for the connected server's version (block/item names), or null. */
     static volatile ProtoDef.VersionData versionData;
+    /** Minecraft version of the connected server's protocol, e.g. "1.21.11". */
+    static volatile String versionName;
     /** The running bot (for sending chat), or null. */
     static volatile Bot bot;
     static volatile Bot.Config config;

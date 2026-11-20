@@ -321,6 +321,10 @@ final class ProtoDef {
         final int[] shapes; // collision/outline shape type per block (see Shapes)
         final String[][] propNames; // per block: property names
         final String[][][] propValues; // per block: values of each property
+        final String[] blockIds; // internal names, e.g. "oak_log"
+        final double[] hardness; // -1 = unbreakable
+        final String[] material; // e.g. "mineable/pickaxe"
+        final int[][] harvest; // item ids that can harvest it (empty = anything)
 
         VersionData(JSONObject root) throws org.json.JSONException {
             def = new ProtoDef(root.getJSONObject("types"));
@@ -335,6 +339,19 @@ final class ProtoDef {
             for (int i = 0; i < k; i++) {
                 blockMin[i] = bm.getInt(i);
                 blockNames[i] = bn.getString(i);
+            }
+            JSONArray ids = root.optJSONArray("blockIds"), hd = root.optJSONArray("hardness"), mt = root.optJSONArray("material"), hv = root.optJSONArray("harvest");
+            blockIds = new String[k];
+            hardness = new double[k];
+            material = new String[k];
+            harvest = new int[k][];
+            for (int i = 0; i < k; i++) {
+                blockIds[i] = ids != null && i < ids.length() ? ids.getString(i) : "";
+                hardness[i] = hd != null && i < hd.length() ? hd.getDouble(i) : 1;
+                material[i] = mt != null && i < mt.length() ? mt.getString(i) : "default";
+                JSONArray h = hv != null && i < hv.length() ? hv.getJSONArray(i) : new JSONArray();
+                harvest[i] = new int[h.length()];
+                for (int j = 0; j < h.length(); j++) harvest[i][j] = h.getInt(j);
             }
             JSONArray sh = root.optJSONArray("shapes"), pr = root.optJSONArray("props");
             shapes = new int[k];

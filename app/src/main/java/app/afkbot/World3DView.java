@@ -3,6 +3,7 @@ package app.afkbot;
 import android.content.Context;
 import android.opengl.GLES20;
 import android.opengl.GLSurfaceView;
+import android.opengl.GLUtils;
 import android.opengl.Matrix;
 import android.view.MotionEvent;
 import android.view.ScaleGestureDetector;
@@ -21,7 +22,8 @@ import javax.microedition.khronos.opengles.GL10;
  * first-person or orbit camera, tap a block to select it. Only renders while visible.
  */
 public class World3DView extends GLSurfaceView implements GLSurfaceView.Renderer {
-    private static final int STRIDE = 7; // x y z r g b a
+    private static final int STRIDE = 9; // x y z u v r g b a
+    private static final float WU = 0.5f / TexturePack.SIZE, WV = 0.5f / TexturePack.SIZE; // centre of the white tile
     private static final float SKY_R = 0.55f, SKY_G = 0.73f, SKY_B = 0.95f;
 
     interface Listener {
@@ -33,6 +35,9 @@ public class World3DView extends GLSurfaceView implements GLSurfaceView.Renderer
 
         /** First-person look changed by dragging. */
         void onLook(float yaw, float pitch);
+
+        /** A player or mob was tapped. */
+        void onSelectEntity(World.Dot entity);
     }
 
     volatile int radius = 16;
@@ -56,7 +61,10 @@ public class World3DView extends GLSurfaceView implements GLSurfaceView.Renderer
     private int builtVersion = -1, builtBX = Integer.MIN_VALUE, builtBY, builtBZ, builtRadius;
     private long lastBuild;
 
-    private int program, aPos, aCol, uMvp, uCam, uFog;
+    private int program, aPos, aUv, aCol, uMvp, uCam, uFog, uTex;
+    private int texId = 0;
+    private TextureStore.Loaded uploaded;
+    private volatile boolean meshTextured;
     private final float[] proj = new float[16], view = new float[16], mvp = new float[16], inv = new float[16];
     private volatile float[] lastMvp;
     private volatile float eyeX, eyeY, eyeZ; // camera position in mesh coordinates
@@ -150,11 +158,55 @@ public class World3DView extends GLSurfaceView implements GLSurfaceView.Renderer
         double ox = near[0] + originX, oy = near[1] + originY, oz = near[2] + originZ;
         double dx = far[0] - near[0], dy = far[1] - near[1], dz = far[2] - near[2];
         double len = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        int[] hit = raycast(ox, oy, oz, dx / len, dy / len, dz / len, 96);
-        selected = hit;
+        dx /= len;
+        dy /= len;
+        dz /= len;
+        int[] hit = raycast(ox, oy, oz, dx, dy, dz, 96);
+        double blockT = hit == null ? 1e9 : Math.sqrt(sq(hit[0] + 0.5 - ox) + sq(hit[1] + 0.5 - oy) + sq(hit[2] + 0.5 - oz)) - 0.5;
+        // players and mobs in front of the block win
+        World.Dot best = null;
+        double bestT = blockT;
+        for (World.Dot d : World.snapshot(null)) {
+            if (d.dist > 40) continue;
+            double w = d.kind == 'i' || d.kind == 'o' ? 0.5 : d.kind == 'a' ? 0.9 : 0.6, h = d.kind == 'i' || d.kind == 'o' ? 0.5 : d.kind == 'a' ? 1.0 : 1.8;
+            double ex = World.selfX + d.dx, ey = World.selfY + d.dy, ez = World.selfZ + d.dz;
+            double t = rayBoxT(ox, oy, oz, dx, dy, dz, ex - w / 2 - 0.1, ey, ez - w / 2 - 0.1, ex + w / 2 + 0.1, ey + h + 0.1, ez + w / 2 + 0.1);
+            if (t >= 0 && t < bestT) {
+                bestT = t;
+                best = d;
+            }
+        }
         Listener l = listener;
-        if (l != null) l.onSelect(hit);
+        if (best != null) {
+            selected = null;
+            if (l != null) l.onSelectEntity(best);
+        } else {
+            selected = hit;
+            if (l != null) l.onSelect(hit);
+        }
         requestRender();
+    }
+
+    private static double sq(double v) {
+        return v * v;
+    }
+
+    /** Distance along the ray to a box, or -1 if missed. */
+    private static double rayBoxT(double ox, double oy, double oz, double dx, double dy, double dz,
+                                  double x0, double y0, double z0, double x1, double y1, double z1) {
+        double tmin = 0, tmax = 1e9;
+        double[] o = {ox, oy, oz}, d = {dx, dy, dz}, lo = {x0, y0, z0}, hi = {x1, y1, z1};
+        for (int a = 0; a < 3; a++) {
+            if (Math.abs(d[a]) < 1e-9) {
+                if (o[a] < lo[a] || o[a] > hi[a]) return -1;
+                continue;
+            }
+            double t1 = (lo[a] - o[a]) / d[a], t2 = (hi[a] - o[a]) / d[a];
+            tmin = Math.max(tmin, Math.min(t1, t2));
+            tmax = Math.min(tmax, Math.max(t1, t2));
+            if (tmin > tmax) return -1;
+        }
+        return tmin;
     }
 
     private static float[] unproject(float[] invm, float x, float y, float z) {
@@ -283,9 +335,14 @@ public class World3DView extends GLSurfaceView implements GLSurfaceView.Renderer
     }
 
     private void build(int ox, int oy, int oz, int r) {
-        FloatList solid = new FloatList(1 << 17), water = new FloatList(1 << 13);
+        FloatList solid = new FloatList(1 << 18), water = new FloatList(1 << 13);
         int vr = Math.max(10, r / 2 + 8);
-        // cache: colour for full blocks, -2 for shaped (non-full) blocks, 0 air, -1 unknown, WATER for water
+        TextureStore.Loaded tex = TextureStore.current;
+        TexturePack.Map3D tm = tex != null ? tex.map : null;
+        ProtoDef.VersionData vd = Hub.versionData;
+        if (vd == null) tm = null;
+        meshTextured = tm != null;
+        // cache: colour for full blocks, -2 for shaped (non-full) blocks, 0 air/transparent, -1 unknown, WATER for water
         int sx = 2 * r + 3, sy = 2 * vr + 3, sz = 2 * r + 3;
         int[] cache = new int[sx * sy * sz];
         int[] states = new int[sx * sy * sz];
@@ -308,31 +365,42 @@ public class World3DView extends GLSurfaceView implements GLSurfaceView.Renderer
             for (int z = -r; z <= r; z++) {
                 if (x * x + z * z > r * r) continue;
                 for (int y = -vr; y <= vr; y++) {
-                    int col = at(cache, sx, sy, sz, r, vr, x, y, z);
+                    int k = ((x + r + 1) * sz + (z + r + 1)) * sy + (y + vr + 1);
+                    int st = states[k];
+                    int col = cache[k];
                     int wx = ox + x, wy = oy + y, wz = oz + z;
+                    float noise = tm != null ? 1f : 0.93f + ((hash(wx, wy, wz) & 255) / 255f) * 0.14f;
+                    int bi = tm != null && st > 0 ? vd.blockIndex(st) : -1;
+                    if (bi >= tm_len(tm)) bi = -1;
+                    if (col == 0 && bi >= 0 && tm.cross[bi] >= 0) {
+                        cross(solid, x, y, z, tm.cross[bi], tm.tint[bi]);
+                        continue;
+                    }
                     if (col == -2) {
-                        int st = states[((x + r + 1) * sz + (z + r + 1)) * sy + (y + vr + 1)];
-                        shaped(solid, x, y, z, MapData.colorOf(st), Shapes.outline(st), 0.93f + ((hash(wx, wy, wz) & 255) / 255f) * 0.14f);
+                        shaped(solid, x, y, z, MapData.colorOf(st), Shapes.outline(st), noise, tm, bi);
                         continue;
                     }
                     if (col <= 0) continue;
                     boolean isWater = col == MapData.WATER;
-                    float noise = 0.93f + ((hash(wx, wy, wz) & 255) / 255f) * 0.14f;
                     for (int f = 0; f < 6; f++) {
                         int n = at(cache, sx, sy, sz, r, vr, x + DIRS[f][0], y + DIRS[f][1], z + DIRS[f][2]);
                         boolean show = isWater ? n == 0 || n == -2 : (n == 0 || n == MapData.WATER || n == -2);
                         if (!show) continue;
-                        float shade = SHADE[f] * (isWater ? 1f : noise);
-                        float cr = ((col >> 16) & 255) / 255f, cg = ((col >> 8) & 255) / 255f, cb = (col & 255) / 255f;
+                        float shade = SHADE[f] * noise;
+                        int tile = bi >= 0 ? tm.faces[bi][f] : -1;
+                        int c = tile >= 0 ? ((tm.tintMask[bi] >> f & 1) != 0 && tm.tint[bi] != 0 ? tm.tint[bi] : 0xFFFFFF) : col;
+                        if (tile < 0) tile = 0;
+                        float cr = ((c >> 16) & 255) / 255f, cg = ((c >> 8) & 255) / 255f, cb = (c & 255) / 255f;
                         float a = isWater ? 0.62f : 1f;
                         FloatList out = isWater ? water : solid;
                         float[][] q = FACE[f];
                         float[] ao = new float[4];
-                        for (int k = 0; k < 4; k++) ao[k] = isWater ? 1f : vertexAo(cache, sx, sy, sz, r, vr, x, y, z, f, q[k]);
+                        for (int kk = 0; kk < 4; kk++) ao[kk] = isWater ? 1f : vertexAo(cache, sx, sy, sz, r, vr, x, y, z, f, q[kk]);
                         int[] order = ao[0] + ao[2] < ao[1] + ao[3] ? new int[]{1, 2, 3, 1, 3, 0} : new int[]{0, 1, 2, 0, 2, 3};
-                        for (int k : order) {
-                            float s = shade * ao[k];
-                            out.add(x + q[k][0], y + q[k][1] - (isWater && f == 0 ? 0.12f : 0), z + q[k][2]);
+                        for (int kk : order) {
+                            float s = shade * ao[kk];
+                            out.add(x + q[kk][0], y + q[kk][1] - (isWater && f == 0 ? 0.12f : 0), z + q[kk][2]);
+                            uvOf(out, tile, f, q[kk][0], q[kk][1], q[kk][2]);
                             out.add(cr * s, cg * s, cb * s, a);
                         }
                     }
@@ -348,16 +416,64 @@ public class World3DView extends GLSurfaceView implements GLSurfaceView.Renderer
         pendingSolid = solid.toBuffer();
     }
 
+    private static int tm_len(TexturePack.Map3D tm) {
+        return tm == null ? 0 : tm.faces.length;
+    }
+
+    /** Texture coordinates for a point (lx, ly, lz in 0..1) on a face, inside an atlas tile. */
+    private static void uvOf(FloatList out, int tile, int f, float lx, float ly, float lz) {
+        float uu, vv;
+        switch (f) {
+            case 0: uu = lx; vv = lz; break;          // up
+            case 1: uu = lx; vv = 1 - lz; break;      // down
+            case 2: uu = 1 - lx; vv = 1 - ly; break;  // north
+            case 3: uu = lx; vv = 1 - ly; break;      // south
+            case 4: uu = 1 - lz; vv = 1 - ly; break;  // east
+            default: uu = lz; vv = 1 - ly; break;     // west
+        }
+        float in = 0.02f; // stay inside the tile so neighbours don't bleed in
+        uu = in + uu * (1 - 2 * in);
+        vv = in + vv * (1 - 2 * in);
+        int tx = (tile % TexturePack.GRID) * TexturePack.TILE, ty = (tile / TexturePack.GRID) * TexturePack.TILE;
+        out.uv((tx + uu * TexturePack.TILE) / TexturePack.SIZE, (ty + vv * TexturePack.TILE) / TexturePack.SIZE);
+    }
+
     /** Draws a non-full block (door, slab, stairs, fence, button...) as its real boxes. */
-    private static void shaped(FloatList out, int x, int y, int z, int col, float[][] boxes, float noise) {
-        float cr = ((col >> 16) & 255) / 255f, cg = ((col >> 8) & 255) / 255f, cb = (col & 255) / 255f;
+    private static void shaped(FloatList out, int x, int y, int z, int col, float[][] boxes, float noise, TexturePack.Map3D tm, int bi) {
         for (float[] b : boxes) {
             for (int f = 0; f < 6; f++) {
+                int tile = bi >= 0 ? tm.faces[bi][f] : -1;
+                int c = tile >= 0 ? ((tm.tintMask[bi] >> f & 1) != 0 && tm.tint[bi] != 0 ? tm.tint[bi] : 0xFFFFFF) : col;
+                if (tile < 0) tile = 0;
+                float cr = ((c >> 16) & 255) / 255f, cg = ((c >> 8) & 255) / 255f, cb = (c & 255) / 255f;
                 float s = SHADE[f] * noise;
                 float[][] q = FACE[f];
                 for (int k : new int[]{0, 1, 2, 0, 2, 3}) {
-                    out.add(x + b[0] + q[k][0] * (b[3] - b[0]), y + b[1] + q[k][1] * (b[4] - b[1]), z + b[2] + q[k][2] * (b[5] - b[2]));
+                    float lx = b[0] + q[k][0] * (b[3] - b[0]), ly = b[1] + q[k][1] * (b[4] - b[1]), lz = b[2] + q[k][2] * (b[5] - b[2]);
+                    out.add(x + lx, y + ly, z + lz);
+                    uvOf(out, tile, f, lx, ly, lz);
                     out.add(cr * s, cg * s, cb * s, 1f);
+                }
+            }
+        }
+    }
+
+    /** Plants: two crossed, double-sided textured planes. */
+    private static void cross(FloatList out, int x, int y, int z, int tile, int tint) {
+        int c = tint != 0 ? tint : 0xFFFFFF;
+        float cr = ((c >> 16) & 255) / 255f, cg = ((c >> 8) & 255) / 255f, cb = (c & 255) / 255f;
+        float[][][] planes = {{{0.15f, 0, 0.15f}, {0.85f, 0, 0.85f}, {0.85f, 1, 0.85f}, {0.15f, 1, 0.15f}},
+                {{0.85f, 0, 0.15f}, {0.15f, 0, 0.85f}, {0.15f, 1, 0.85f}, {0.85f, 1, 0.15f}}};
+        float[][] uv = {{0, 1}, {1, 1}, {1, 0}, {0, 0}};
+        int tx = (tile % TexturePack.GRID) * TexturePack.TILE, ty = (tile / TexturePack.GRID) * TexturePack.TILE;
+        for (float[][] p : planes) {
+            for (int[] order : new int[][]{{0, 1, 2, 0, 2, 3}, {0, 2, 1, 0, 3, 2}}) { // both sides
+                for (int k : order) {
+                    out.add(x + p[k][0], y + p[k][1], z + p[k][2]);
+                    float in = 0.02f;
+                    out.uv((tx + (in + uv[k][0] * (1 - 2 * in)) * TexturePack.TILE) / TexturePack.SIZE,
+                            (ty + (in + uv[k][1] * (1 - 2 * in)) * TexturePack.TILE) / TexturePack.SIZE);
+                    out.add(cr * 0.9f, cg * 0.9f, cb * 0.9f, 1f);
                 }
             }
         }
@@ -414,6 +530,12 @@ public class World3DView extends GLSurfaceView implements GLSurfaceView.Renderer
             a[size++] = z;
         }
 
+        void uv(float u, float v) {
+            ensure(2);
+            a[size++] = u;
+            a[size++] = v;
+        }
+
         void add(float r, float g, float b, float al) {
             ensure(4);
             a[size++] = r;
@@ -438,12 +560,13 @@ public class World3DView extends GLSurfaceView implements GLSurfaceView.Renderer
 
     private static final String VS =
             "uniform mat4 uMvp; uniform vec3 uCam; uniform float uFog;" +
-                    "attribute vec3 aPos; attribute vec4 aCol; varying vec4 vCol; varying float vF;" +
-                    "void main(){ gl_Position = uMvp * vec4(aPos,1.0); vCol = aCol;" +
+                    "attribute vec3 aPos; attribute vec2 aUv; attribute vec4 aCol; varying vec4 vCol; varying vec2 vUv; varying float vF;" +
+                    "void main(){ gl_Position = uMvp * vec4(aPos,1.0); vCol = aCol; vUv = aUv;" +
                     " float d = distance(aPos, uCam); vF = clamp((d - uFog*0.6)/(uFog*0.4), 0.0, 1.0); }";
     private static final String FS =
-            "precision mediump float; varying vec4 vCol; varying float vF;" +
-                    "void main(){ gl_FragColor = vec4(mix(vCol.rgb, vec3(" + SKY_R + "," + SKY_G + "," + SKY_B + "), vF), vCol.a); }";
+            "precision mediump float; uniform sampler2D uTex; varying vec4 vCol; varying vec2 vUv; varying float vF;" +
+                    "void main(){ vec4 t = texture2D(uTex, vUv); if (t.a < 0.4) discard;" +
+                    " gl_FragColor = vec4(mix(t.rgb * vCol.rgb, vec3(" + SKY_R + "," + SKY_G + "," + SKY_B + "), vF), vCol.a < 0.99 ? vCol.a * max(t.a, 0.75) : 1.0); }";
 
     @Override
     public void onSurfaceCreated(GL10 gl, EGLConfig config) {
@@ -453,6 +576,21 @@ public class World3DView extends GLSurfaceView implements GLSurfaceView.Renderer
         GLES20.glLinkProgram(program);
         aPos = GLES20.glGetAttribLocation(program, "aPos");
         aCol = GLES20.glGetAttribLocation(program, "aCol");
+        aUv = GLES20.glGetAttribLocation(program, "aUv");
+        uTex = GLES20.glGetUniformLocation(program, "uTex");
+        // start with a plain white texture; the block atlas replaces it once downloaded
+        int[] t = new int[1];
+        GLES20.glGenTextures(1, t, 0);
+        texId = t[0];
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texId);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_NEAREST);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_NEAREST);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
+        java.nio.ByteBuffer white = java.nio.ByteBuffer.allocateDirect(4);
+        white.put(new byte[]{-1, -1, -1, -1}).position(0);
+        GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, 1, 1, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, white);
+        uploaded = null;
         uMvp = GLES20.glGetUniformLocation(program, "uMvp");
         uCam = GLES20.glGetUniformLocation(program, "uCam");
         uFog = GLES20.glGetUniformLocation(program, "uFog");
@@ -493,6 +631,14 @@ public class World3DView extends GLSurfaceView implements GLSurfaceView.Renderer
             originX = pendingOX;
             originY = pendingOY;
             originZ = pendingOZ;
+        }
+        TextureStore.Loaded L = TextureStore.current;
+        if (L != uploaded) {
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texId);
+            if (L != null) GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, L.atlas, 0);
+            uploaded = L;
+            builtVersion = -1; // rebuild with texture coordinates
+            builtBX = Integer.MIN_VALUE;
         }
         GLES20.glClearColor(SKY_R, SKY_G, SKY_B, 1f);
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT | GLES20.GL_DEPTH_BUFFER_BIT);
@@ -543,6 +689,9 @@ public class World3DView extends GLSurfaceView implements GLSurfaceView.Renderer
         lastMvp = mvp.clone();
 
         GLES20.glUseProgram(program);
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texId);
+        GLES20.glUniform1i(uTex, 0);
         GLES20.glUniformMatrix4fv(uMvp, 1, false, mvp, 0);
         GLES20.glUniform3f(uCam, ex, ey, ez);
         GLES20.glUniform1f(uFog, radius + (firstPerson ? 0 : camDist));
@@ -573,9 +722,11 @@ public class World3DView extends GLSurfaceView implements GLSurfaceView.Renderer
         if (count <= 0) return;
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vbo);
         GLES20.glEnableVertexAttribArray(aPos);
+        GLES20.glEnableVertexAttribArray(aUv);
         GLES20.glEnableVertexAttribArray(aCol);
         GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, STRIDE * 4, 0);
-        GLES20.glVertexAttribPointer(aCol, 4, GLES20.GL_FLOAT, false, STRIDE * 4, 12);
+        GLES20.glVertexAttribPointer(aUv, 2, GLES20.GL_FLOAT, false, STRIDE * 4, 12);
+        GLES20.glVertexAttribPointer(aCol, 4, GLES20.GL_FLOAT, false, STRIDE * 4, 20);
         GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, count);
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
     }
@@ -585,10 +736,13 @@ public class World3DView extends GLSurfaceView implements GLSurfaceView.Renderer
         FloatBuffer fb = f.toBuffer();
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
         GLES20.glEnableVertexAttribArray(aPos);
+        GLES20.glEnableVertexAttribArray(aUv);
         GLES20.glEnableVertexAttribArray(aCol);
         fb.position(0);
         GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, STRIDE * 4, fb);
         fb.position(3);
+        GLES20.glVertexAttribPointer(aUv, 2, GLES20.GL_FLOAT, false, STRIDE * 4, fb);
+        fb.position(5);
         GLES20.glVertexAttribPointer(aCol, 4, GLES20.GL_FLOAT, false, STRIDE * 4, fb);
         GLES20.glDrawArrays(mode, 0, f.size / STRIDE);
     }
@@ -643,6 +797,7 @@ public class World3DView extends GLSurfaceView implements GLSurfaceView.Renderer
             float[][] q = FACE[fi];
             for (int k : new int[]{0, 1, 2, 0, 2, 3}) {
                 out.add(x0 + q[k][0] * w, y + q[k][1] * h, z0 + q[k][2] * d);
+                out.uv(WU, WV);
                 out.add(r, g, b, 1f);
             }
         }
@@ -658,6 +813,7 @@ public class World3DView extends GLSurfaceView implements GLSurfaceView.Renderer
         for (int[] ed : edges)
             for (int k : ed) {
                 f.add(x + c[k][0], y + c[k][1], z + c[k][2]);
+                f.uv(WU, WV);
                 f.add(1f, 1f, 1f, 1f);
             }
         GLES20.glLineWidth(3f);

@@ -88,7 +88,10 @@ public class MainActivity extends Activity implements Hub.Listener {
                 if (view3d == null && cfg.view3d && World.inWorld) update3dLifecycle();
                 info3d.setVisibility(view3d == null || !World.inWorld ? View.VISIBLE : View.GONE);
                 if (Inv.version != shownInvVersion) refreshContainer();
-                if (target != null) updateTarget();
+                if (Inv.version != shownHotbar || (hotbar != null && hotbar.getChildCount() == 0 && World.inWorld)) refreshHotbar();
+                if (target != null || targetEntity != null) updateTarget();
+                if (TextureStore.busy) texChip.setText("Textures: " + TextureStore.status);
+                else if (texChip != null && System.currentTimeMillis() % 2000 < 500) updateTexChip();
                 Bot b = Hub.bot;
                 if (drive && b != null && !b.manual) setDrive(true);
             }
@@ -550,6 +553,12 @@ public class MainActivity extends Activity implements Hub.Listener {
     private boolean firstPerson3d = true, drive;
     private int shownInvVersion = -1;
     private volatile int[] target;
+    private volatile World.Dot targetEntity;
+    private Button mineBtn;
+    private LinearLayout hotbar;
+    private int shownHotbar = -1;
+    private TextView texChip;
+    private boolean texturesOffByUser;
 
     private View build3d() {
         LinearLayout col = new LinearLayout(this);
@@ -630,6 +639,17 @@ public class MainActivity extends Activity implements Hub.Listener {
                 showInventory();
             }
         });
+        texChip = text("Textures", 13, TEXT, true);
+        texChip.setPadding(dp(14), dp(8), dp(14), dp(8));
+        LinearLayout.LayoutParams tcl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        tcl.setMargins(dp(8), 0, 0, 0);
+        acts.addView(texChip, tcl);
+        texChip.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                texturesClicked();
+            }
+        });
+        updateTexChip();
 
         holder3d = new FrameLayout(this);
         holder3d.setBackground(round(SURFACE, dp(16), STROKE));
@@ -654,14 +674,23 @@ public class MainActivity extends Activity implements Hub.Listener {
         targetBar.setBackground(round(0xDD0B0D12, dp(12), STROKE));
         targetText = text("", 13, TEXT, false);
         targetBar.addView(targetText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-        openBtn = smallButton("Use", ACCENT);
+        mineBtn = smallButton("\u26CF Mine", 0xFFB45309);
+        LinearLayout.LayoutParams mb = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38));
+        mb.rightMargin = dp(6);
+        mineBtn.setLayoutParams(mb);
+        targetBar.addView(mineBtn);
+        mineBtn.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                leftClick();
+            }
+        });
+        openBtn = smallButton("\u270B Use", ACCENT);
         LinearLayout.LayoutParams ob = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38));
         openBtn.setLayoutParams(ob);
         targetBar.addView(openBtn);
         openBtn.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
-                int[] t = target;
-                if (t != null) openBlock(t);
+                rightClick();
             }
         });
         FrameLayout.LayoutParams tl = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP);
@@ -699,7 +728,13 @@ public class MainActivity extends Activity implements Hub.Listener {
         }, true));
         driveControls.addView(btns);
         FrameLayout.LayoutParams dl = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM);
-        dl.setMargins(dp(10), 0, dp(10), dp(10));
+        dl.setMargins(dp(10), 0, dp(10), dp(62));
+        hotbar = new LinearLayout(this);
+        hotbar.setOrientation(LinearLayout.HORIZONTAL);
+        hotbar.setGravity(Gravity.CENTER);
+        FrameLayout.LayoutParams hbl = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50), Gravity.BOTTOM);
+        hbl.setMargins(dp(6), 0, dp(6), dp(6));
+        holder3d.addView(hotbar, hbl);
         holder3d.addView(driveControls, dl);
         driveControls.setVisibility(View.GONE);
 
@@ -862,6 +897,7 @@ public class MainActivity extends Activity implements Hub.Listener {
         if (holder3d == null || cfg == null) return;
         boolean want = cfg.view3d && tab == T_3D && resumed;
         if (want && view3d == null) {
+            if (Hub.versionName != null && TextureStore.current == null && TextureStore.have(this, Hub.versionName) && !texturesOffByUser) TextureStore.load(this, Hub.versionName);
             view3d = new World3DView(this);
             view3d.radius = radius3d;
             view3d.firstPerson = firstPerson3d;
@@ -871,6 +907,7 @@ public class MainActivity extends Activity implements Hub.Listener {
             view3d.listener = new World3DView.Listener() {
                 public void onSelect(final int[] block) {
                     target = block;
+                    targetEntity = null;
                     ui.post(new Runnable() {
                         public void run() {
                             updateTarget();
@@ -880,6 +917,16 @@ public class MainActivity extends Activity implements Hub.Listener {
 
                 public void onLabels(List<Object[]> labels) {
                     overlay.setLabels(labels);
+                }
+
+                public void onSelectEntity(final World.Dot e) {
+                    target = null;
+                    targetEntity = e;
+                    ui.post(new Runnable() {
+                        public void run() {
+                            updateTarget();
+                        }
+                    });
                 }
 
                 public void onLook(float yaw, float pitch) {
@@ -910,8 +957,24 @@ public class MainActivity extends Activity implements Hub.Listener {
 
     private void updateTarget() {
         int[] t = target;
-        if (t == null || view3d == null) {
+        World.Dot e = targetEntity;
+        Bot b = Hub.bot;
+        if ((t == null && e == null) || view3d == null) {
             targetBar.setVisibility(View.GONE);
+            return;
+        }
+        if (e != null) {
+            // refresh its distance from the live entity list
+            for (World.Dot d : World.snapshot(cfg.friendSet())) if (d.id == e.id) e = d;
+            targetEntity = e;
+            String kind = e.kind == 'p' ? "player" : e.kind == 'h' ? "hostile" : e.kind == 'a' ? "animal" : "entity";
+            targetText.setText(String.format(Locale.US, "%s (%s)  \u2022  %.1f m%s", e.label, kind, e.dist, e.dist > 3.5 ? "  (too far)" : ""));
+            mineBtn.setText("\u2694 Hit");
+            mineBtn.setVisibility(b != null ? View.VISIBLE : View.GONE);
+            openBtn.setVisibility(b != null ? View.VISIBLE : View.GONE);
+            mineBtn.setAlpha(e.dist <= 3.5 ? 1f : 0.45f);
+            openBtn.setAlpha(e.dist <= 3.5 ? 1f : 0.45f);
+            targetBar.setVisibility(View.VISIBLE);
             return;
         }
         String name = "Block";
@@ -919,11 +982,184 @@ public class MainActivity extends Activity implements Hub.Listener {
         int st = MapData.stateAt(t[0], t[1], t[2]);
         if (vd != null && st > 0) name = vd.blockName(st);
         double r = World3DView.reach(t);
-        targetText.setText(String.format(Locale.US, "%s  •  %d, %d, %d  •  %.1f m%s", name, t[0], t[1], t[2], r, r > 4.5 ? "  (too far)" : ""));
-        Bot b = Hub.bot;
+        float prog = Bot.miningProgress;
+        String extra = b != null && b.isMining() && prog >= 0 ? String.format(Locale.US, "  \u2022  mining %d%%", Math.round(prog * 100)) : r > 4.5 ? "  (too far)" : "";
+        targetText.setText(String.format(Locale.US, "%s  \u2022  %d, %d, %d  \u2022  %.1f m%s", name, t[0], t[1], t[2], r, extra));
+        mineBtn.setText(b != null && b.isMining() ? "\u25A0 Stop" : "\u26CF Mine");
+        mineBtn.setVisibility(b != null && b.containersSupported() ? View.VISIBLE : View.GONE);
         openBtn.setVisibility(b != null && b.containersSupported() ? View.VISIBLE : View.GONE);
+        mineBtn.setAlpha(r <= 4.5 ? 1f : 0.45f);
         openBtn.setAlpha(r <= 4.5 ? 1f : 0.45f);
         targetBar.setVisibility(View.VISIBLE);
+    }
+
+    /** Left click: mine the block (tap again to stop) or hit the player/mob. */
+    private void leftClick() {
+        Bot b = Hub.bot;
+        if (b == null) return;
+        World.Dot e = targetEntity;
+        if (e != null) {
+            toast(b.attack(e));
+            return;
+        }
+        int[] t = target;
+        if (t == null) return;
+        if (b.isMining()) {
+            b.stopMining(true);
+            toast("Stopped mining");
+        } else {
+            toast(b.startMining(t));
+        }
+        updateTarget();
+    }
+
+    /** Right click: use/open the block or place the held block against it; use the player/mob; else use the held item. */
+    private void rightClick() {
+        Bot b = Hub.bot;
+        if (b == null) return;
+        World.Dot e = targetEntity;
+        if (e != null) {
+            toast(b.interact(e));
+            return;
+        }
+        int[] t = target;
+        if (t == null) {
+            b.useItem();
+            return;
+        }
+        double r = World.reach(t);
+        if (r > 4.5) {
+            toast(String.format(Locale.US, "Too far (%.1f m) - get within 4.5 blocks", r));
+            return;
+        }
+        int st = MapData.stateAt(t[0], t[1], t[2]);
+        ProtoDef.VersionData vd = Hub.versionData;
+        String name = vd != null && st > 0 ? vd.blockName(st) : "block";
+        if (Bot.isContainer(name)) {
+            openBlock(t);
+            return;
+        }
+        b.useBlock(t[0], t[1], t[2], t[3]); // on the tapped face: opens doors / presses buttons / places your held block
+        Inv.Item held = Inv.heldItem();
+        toast(held != null ? "Used " + held.name + " on " + name : "Used " + name);
+    }
+
+    private void refreshHotbar() {
+        if (hotbar == null) return;
+        shownHotbar = Inv.version;
+        hotbar.removeAllViews();
+        Bot bot = Hub.bot;
+        boolean show = view3d != null && bot != null && World.inWorld && bot.containersSupported();
+        hotbar.setVisibility(show ? View.VISIBLE : View.GONE);
+        if (!show) return;
+        List<Inv.Item> inv = Inv.inventory;
+        for (int i = 0; i < 9; i++) {
+            final int slot = i;
+            Inv.Item it = 36 + i < inv.size() ? inv.get(36 + i) : null;
+            String label = it == null ? "" : shortName(it.name) + (it.count > 1 ? "\n" + it.count : "");
+            TextView c = text(label, 9, TEXT, true);
+            c.setGravity(Gravity.CENTER);
+            c.setMaxLines(2);
+            boolean sel = Inv.held == i;
+            c.setBackground(round(sel ? 0xDD3B2A6B : 0xB30B0D12, dp(8), sel ? ACCENT2 : STROKE));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1);
+            lp.setMargins(dp(2), 0, dp(2), 0);
+            hotbar.addView(c, lp);
+            c.setOnClickListener(new View.OnClickListener() {
+                public void onClick(View v) {
+                    Bot b = Hub.bot;
+                    if (b != null) b.selectSlot(slot);
+                }
+            });
+        }
+        TextView use = text("\u270B", 18, TEXT, true);
+        use.setGravity(Gravity.CENTER);
+        use.setBackground(round(0xCC8B5CF6, dp(8), ACCENT));
+        LinearLayout.LayoutParams ul = new LinearLayout.LayoutParams(dp(44), ViewGroup.LayoutParams.MATCH_PARENT);
+        ul.setMargins(dp(4), 0, 0, 0);
+        hotbar.addView(use, ul);
+        use.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                Bot b = Hub.bot;
+                if (b == null) return;
+                b.useItem();
+                Inv.Item held = Inv.heldItem();
+                toast(held != null ? "Used " + held.name : "Nothing in your hand");
+            }
+        });
+    }
+
+    private static String shortName(String n) {
+        String[] w = n.split(" ");
+        if (w.length == 1) return n.length() > 8 ? n.substring(0, 8) : n;
+        String last = w[w.length - 1];
+        String first = w[0];
+        String s = first.length() > 4 ? first.substring(0, 4) : first;
+        return s + " " + (last.length() > 6 ? last.substring(0, 6) : last);
+    }
+
+    // ----- textures -----
+
+    private void updateTexChip() {
+        if (texChip == null) return;
+        String v = Hub.versionName;
+        boolean have = v != null && TextureStore.have(this, v);
+        boolean on = TextureStore.current != null;
+        texChip.setText(TextureStore.busy ? "Textures: downloading..." : on ? "Textures: on" : have ? "Textures: off" : "Get textures");
+        styleChip(texChip, ACCENT2, on);
+    }
+
+    private void texturesClicked() {
+        final String v = Hub.versionName;
+        final ProtoDef.VersionData vd = Hub.versionData;
+        if (v == null || vd == null) {
+            toast("Start AFK first (textures match the server's Minecraft version)");
+            return;
+        }
+        if (TextureStore.busy) {
+            toast(TextureStore.status);
+            return;
+        }
+        if (TextureStore.current != null) {
+            TextureStore.current = null; // turn off (kept on the phone)
+            texturesOffByUser = true;
+            updateTexChip();
+            return;
+        }
+        if (TextureStore.have(this, v)) {
+            texturesOffByUser = false;
+            if (TextureStore.load(this, v) == null) toast(TextureStore.status);
+            updateTexChip();
+            return;
+        }
+        new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle("Download block textures?")
+                .setMessage("Downloads Minecraft " + v + "'s block textures straight from Mojang (about 1.2 MB, only the needed parts of the game file) and keeps them on this phone. Nothing is shared.")
+                .setPositiveButton("Download", new android.content.DialogInterface.OnClickListener() {
+                    public void onClick(android.content.DialogInterface d, int w) {
+                        final android.content.Context app = getApplicationContext();
+                        new Thread(new Runnable() {
+                            public void run() {
+                                try {
+                                    TextureStore.download(app, v, vd.blockIds);
+                                    Hub.log("Textures for " + v + " downloaded");
+                                } catch (Exception e) {
+                                    TextureStore.status = "Texture download failed: " + e.getMessage();
+                                    Hub.log(TextureStore.status);
+                                }
+                                ui.post(new Runnable() {
+                                    public void run() {
+                                        toast(TextureStore.status);
+                                        updateTexChip();
+                                    }
+                                });
+                            }
+                        }, "textures").start();
+                        updateTexChip();
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
     }
 
     /** Joystick: up = forward, sideways = strafe. */

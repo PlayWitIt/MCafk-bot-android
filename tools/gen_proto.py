@@ -84,6 +84,10 @@ SPEC=[
  ('P_S_CLOSE_WINDOW','play','toServer',['close_window']),
  ('P_S_HELD_SLOT','play','toServer',['held_item_slot']),
  ('P_S_TICK_END','play','toServer',['tick_end']),
+ ('P_S_BLOCK_DIG','play','toServer',['block_dig']),
+ ('P_S_USE_ENTITY','play','toServer',['use_entity']),
+ ('P_S_USE_ITEM','play','toServer',['use_item']),
+ ('P_C_HELD_SLOT','play','toClient',['held_item_slot']),
 ]
 
 # ---- map colours (approximate, like a vanilla map) ----
@@ -251,6 +255,10 @@ for v,p in dp.items():
     out_obj={'protocol':n,'packets':pk,'types':want,'items':inames,
              'blockMin':[b['minStateId'] for b in blocks],'blockNames':[b['displayName'] for b in blocks],
              'shapes':[shape_code(b) for b in blocks],
+             'blockIds':[b['name'] for b in blocks],
+             'hardness':[(-1 if b.get('hardness') is None else b['hardness']) for b in blocks],
+             'material':[b.get('material','default') for b in blocks],
+             'harvest':[[int(k) for k in (b.get('harvestTools') or {}).keys()] for b in blocks],
              'props':[props(b) if shape_code(b)>1 else [] for b in blocks]}
     # plain .json: the Android build silently un-gzips *.gz assets and renames them (it compresses the APK anyway)
     with open(os.path.join(asset_dir,'%d.json'%n),'w') as f: json.dump(out_obj,f,separators=(',',':'))

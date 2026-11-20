@@ -32,6 +32,7 @@ final class World {
 
     /** Immutable copy for drawing. */
     static final class Dot {
+        int id = -1;
         final char kind;
         final String label;
         final double dx, dy, dz, dist;
@@ -136,7 +137,9 @@ final class World {
             for (Ent e : ENTS.values()) {
                 String label = label(e);
                 boolean friend = e.kind == 'p' && friends != null && friends.contains(label);
-                out.add(new Dot(e.kind, label, e.x - sx, e.y - sy, e.z - sz, friend));
+                Dot d = new Dot(e.kind, label, e.x - sx, e.y - sy, e.z - sz, friend);
+                d.id = e.id;
+                out.add(d);
             }
         }
         java.util.Collections.sort(out, new java.util.Comparator<Dot>() {

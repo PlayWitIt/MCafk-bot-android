@@ -19,7 +19,7 @@ Get **AFKBot.apk** from the [latest release](../../releases/tag/latest) and open
   - Visual Range: alert when a player comes into view
   - Auto Respawn, Auto Reconnect, Friends list
 - **Map**: drag to pan, pinch/+/- to zoom, double-tap or ⌖ to re-centre; Surface or **Layer (Y level)** view to see caves and bases
-- **3D view** tab (off by default): first-person or orbit camera, shaded blocks with ambient occlusion, players with name tags;
+- **3D view** tab (off by default): real Minecraft block textures (downloaded from Mojang on first use, ~1.2 MB via partial downloads; nothing from Mojang is bundled), left click (mine / hit) and right click (use / place / interact), hotbar; first-person or orbit camera, shaded blocks with ambient occlusion, players with name tags;
   **Drive** mode with joystick, jump, sneak and sprint (vanilla-style physics and collisions); tap a block to select it and
   **open chests/barrels/shulkers**, see their contents and take items; inventory viewer. Uses the GPU only while open.
 - **Mods**: JavaScript add-ons (sandboxed) installed from examples, a file, pasted code or a link — see [MODS.md](MODS.md)

@@ -28,6 +28,15 @@ final class Inv {
     static volatile List<Item> slots = new ArrayList<Item>(); // container slots + player inventory (36)
     static volatile List<Item> inventory = new ArrayList<Item>(); // window 0
     static volatile int version;
+    /** Selected hotbar slot 0-8. */
+    static volatile int held;
+
+    /** The item in your hand (hotbar slot), or null. */
+    static Item heldItem() {
+        List<Item> inv = inventory;
+        int i = 36 + held;
+        return i < inv.size() ? inv.get(i) : null;
+    }
     static volatile String status = "";
 
     static synchronized void reset() {

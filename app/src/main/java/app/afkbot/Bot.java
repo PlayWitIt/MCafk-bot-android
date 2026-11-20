@@ -476,6 +476,8 @@ final class Bot {
             proto = serverProto;
         }
         ids = Proto.IDS[idx];
+        String[] vn = Proto.NAMES[idx].split("/");
+        Hub.versionName = vn[vn.length - 1];
         vdata = null;
         Hub.VersionLoader vl = Hub.versionLoader;
         if (vl != null && Proto.PROTOCOLS[idx] >= 764) {
@@ -1010,6 +1012,9 @@ final class Bot {
                 else Inv.slots = copy;
                 Inv.version++;
             }
+        } else if (pid == id(Proto.P_C_HELD_SLOT)) {
+            Inv.held = Math.max(0, Math.min(8, p.u8()));
+            Inv.version++;
         } else if (pid == id(Proto.P_C_CLOSE_WINDOW)) {
             Inv.openId = -1;
             Inv.version++;
@@ -1187,6 +1192,214 @@ final class Bot {
                     Buf b = new Buf(id(Proto.P_S_CLOSE_WINDOW));
                     writeContainerId(b, wid);
                     send(b);
+                } catch (IOException ignored) {
+                }
+            }
+        });
+    }
+
+    // ----- left / right click -----
+
+    /** Mining progress 0..1 (or -1 when not mining), for the screen. */
+    static volatile float miningProgress = -1;
+    private volatile int[] miningBlock;
+    private ScheduledFutureHolder miningTask = new ScheduledFutureHolder();
+
+    private static final class ScheduledFutureHolder {
+        java.util.concurrent.ScheduledFuture<?> f;
+    }
+
+    private void lookAt(double tx, double ty, double tz) throws IOException {
+        synchronized (this) {
+            double dx = tx - x, dy = ty - (y + 1.62), dz = tz - z;
+            yaw = (float) Math.toDegrees(Math.atan2(-dx, dz));
+            pitch = (float) -Math.toDegrees(Math.atan2(dy, Math.sqrt(dx * dx + dz * dz)));
+            lookYaw = yaw;
+            lookPitch = pitch;
+        }
+        sendMove(true, true, onGroundM);
+    }
+
+    /** Selects a hotbar slot (0-8). */
+    void selectSlot(final int slot) {
+        Inv.held = slot;
+        Inv.version++;
+        final ScheduledExecutorService t = ticker;
+        if (t == null || state != PLAY || id(Proto.P_S_HELD_SLOT) < 0) return;
+        t.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    send(new Buf(id(Proto.P_S_HELD_SLOT)).u16(slot));
+                } catch (IOException ignored) {
+                }
+            }
+        });
+    }
+
+    /** How many ticks it takes to break a block with what's in your hand (vanilla formula, no enchantments). -1 = unbreakable. */
+    int breakTicks(int state) {
+        ProtoDef.VersionData vd = vdata;
+        if (vd == null) return -1;
+        int bi = vd.blockIndex(state);
+        if (bi < 0 || bi >= vd.hardness.length) return -1;
+        double hard = vd.hardness[bi];
+        if (hard < 0) return -1;
+        if (hard == 0) return 0;
+        Inv.Item held = Inv.heldItem();
+        String item = held == null ? "" : held.name;
+        String mat = vd.material[bi];
+        double speed = 1;
+        boolean right = mat.contains("pickaxe") && item.endsWith("Pickaxe") || mat.contains("axe") && !mat.contains("pickaxe") && item.endsWith(" Axe")
+                || mat.contains("shovel") && item.endsWith("Shovel") || mat.contains("hoe") && item.endsWith("Hoe");
+        if (right) {
+            if (item.startsWith("Wooden")) speed = 2;
+            else if (item.startsWith("Stone")) speed = 4;
+            else if (item.startsWith("Iron")) speed = 6;
+            else if (item.startsWith("Diamond")) speed = 8;
+            else if (item.startsWith("Netherite")) speed = 9;
+            else if (item.startsWith("Golden")) speed = 12;
+        }
+        boolean canHarvest = vd.harvest[bi].length == 0;
+        if (!canHarvest && held != null) for (int h : vd.harvest[bi]) if (h == held.id) canHarvest = true;
+        if (!onGroundM && manual || inWater) speed /= 5;
+        double perTick = speed / hard / (canHarvest ? 30 : 100);
+        return perTick >= 1 ? 0 : (int) Math.ceil(1 / perTick);
+    }
+
+    /** Starts breaking a block (like holding left click). Finishes by itself after the right time. */
+    String startMining(final int[] b) {
+        final ScheduledExecutorService t = ticker;
+        if (t == null || state != PLAY || id(Proto.P_S_BLOCK_DIG) < 0) return "Not connected";
+        if (World.reach(b) > 4.5) return "Too far - get within 4.5 blocks";
+        int st = MapData.stateAt(b[0], b[1], b[2]);
+        if (st <= 0) return "Nothing there";
+        final int ticks = breakTicks(st);
+        if (ticks < 0) return "That block can't be broken";
+        stopMining(false);
+        miningBlock = b;
+        miningProgress = 0;
+        final int face = faceToward(b);
+        final long started = System.currentTimeMillis();
+        t.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    lookAt(b[0] + 0.5, b[1] + 0.5, b[2] + 0.5);
+                    send(new Buf(id(Proto.P_S_BLOCK_DIG)).varInt(0).i64(packPos(b[0], b[1], b[2])).u8(face).varInt(++useSequence));
+                    send(new Buf(id(Proto.P_S_SWING)).varInt(0));
+                    if (ticks == 0) {
+                        miningProgress = -1;
+                        miningBlock = null;
+                    }
+                } catch (IOException ignored) {
+                }
+            }
+        });
+        if (ticks == 0) return "Broken";
+        miningTask.f = t.scheduleAtFixedRate(new Runnable() {
+            @Override
+            public void run() {
+                int[] mb = miningBlock;
+                if (mb == null) return;
+                long elapsed = System.currentTimeMillis() - started;
+                float prog = Math.min(1f, elapsed / (ticks * 50f));
+                miningProgress = prog;
+                try {
+                    send(new Buf(id(Proto.P_S_SWING)).varInt(0)); // arm keeps swinging while mining, like the real client
+                    if (prog >= 1f && elapsed >= ticks * 50L + 100) {
+                        send(new Buf(id(Proto.P_S_BLOCK_DIG)).varInt(2).i64(packPos(mb[0], mb[1], mb[2])).u8(face).varInt(++useSequence));
+                        miningBlock = null;
+                        miningProgress = -1;
+                        java.util.concurrent.ScheduledFuture<?> f = miningTask.f;
+                        if (f != null) f.cancel(false);
+                    }
+                } catch (IOException ignored) {
+                }
+            }
+        }, 200, 200, TimeUnit.MILLISECONDS);
+        return String.format(Locale.US, "Mining... about %.1f s", ticks / 20.0);
+    }
+
+    /** Stops mining (cancel = tell the server you let go). */
+    void stopMining(boolean cancel) {
+        java.util.concurrent.ScheduledFuture<?> f = miningTask.f;
+        if (f != null) f.cancel(false);
+        final int[] mb = miningBlock;
+        miningBlock = null;
+        miningProgress = -1;
+        final ScheduledExecutorService t = ticker;
+        if (cancel && mb != null && t != null && state == PLAY) {
+            t.execute(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        send(new Buf(id(Proto.P_S_BLOCK_DIG)).varInt(1).i64(packPos(mb[0], mb[1], mb[2])).u8(faceToward(mb)).varInt(++useSequence));
+                    } catch (IOException ignored) {
+                    }
+                }
+            });
+        }
+    }
+
+    boolean isMining() {
+        return miningBlock != null;
+    }
+
+    /** Left click on an entity. */
+    String attack(final World.Dot target) {
+        final ScheduledExecutorService t = ticker;
+        if (t == null || state != PLAY || id(Proto.P_S_USE_ENTITY) < 0) return "Not connected";
+        if (proto > 774) return "Attacking isn't supported on this server version yet";
+        if (target.dist > 3.5) return "Too far to hit - get within 3 blocks";
+        t.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    lookAt(World.selfX + target.dx, World.selfY + target.dy + 1.0, World.selfZ + target.dz);
+                    send(new Buf(id(Proto.P_S_USE_ENTITY)).varInt(target.id).varInt(1).bool(inSneak));
+                    send(new Buf(id(Proto.P_S_SWING)).varInt(0));
+                } catch (IOException ignored) {
+                }
+            }
+        });
+        return "Hit " + target.label;
+    }
+
+    /** Right click on an entity (trade, ride, etc.). */
+    String interact(final World.Dot target) {
+        final ScheduledExecutorService t = ticker;
+        if (t == null || state != PLAY || id(Proto.P_S_USE_ENTITY) < 0) return "Not connected";
+        if (proto > 774) return "Not supported on this server version yet";
+        if (target.dist > 3.5) return "Too far - get within 3 blocks";
+        t.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    lookAt(World.selfX + target.dx, World.selfY + target.dy + 1.0, World.selfZ + target.dz);
+                    send(new Buf(id(Proto.P_S_USE_ENTITY)).varInt(target.id).varInt(0).varInt(0).bool(inSneak));
+                    send(new Buf(id(Proto.P_S_SWING)).varInt(0));
+                } catch (IOException ignored) {
+                }
+            }
+        });
+        return "Used " + target.label;
+    }
+
+    /** Right click in the air with the held item (eat, drink, throw...). */
+    void useItem() {
+        final ScheduledExecutorService t = ticker;
+        if (t == null || state != PLAY || id(Proto.P_S_USE_ITEM) < 0) return;
+        t.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Buf b = new Buf(id(Proto.P_S_USE_ITEM)).varInt(0).varInt(++useSequence);
+                    synchronized (Bot.this) {
+                        if (proto >= 767) b.f32(yaw).f32(pitch);
+                    }
+                    send(b);
+                    send(new Buf(id(Proto.P_S_SWING)).varInt(0));
                 } catch (IOException ignored) {
                 }
             }
@@ -1868,7 +2081,8 @@ final class Bot {
         for (int k : want) if (ids[k] == pid) return true;
         if (MapData.supported && (pid == id(Proto.P_C_MAP_CHUNK) || pid == id(Proto.P_C_UNLOAD_CHUNK))) return true;
         if (pid == id(Proto.P_C_BLOCK_CHANGE) || pid == id(Proto.P_C_MULTI_BLOCK) || pid == id(Proto.P_C_WINDOW_ITEMS)
-                || pid == id(Proto.P_C_SET_SLOT) || pid == id(Proto.P_C_OPEN_WINDOW) || pid == id(Proto.P_C_CLOSE_WINDOW)) return true;
+                || pid == id(Proto.P_C_SET_SLOT) || pid == id(Proto.P_C_OPEN_WINDOW) || pid == id(Proto.P_C_CLOSE_WINDOW)
+                || pid == id(Proto.P_C_HELD_SLOT)) return true;
         return pid == id(Proto.P_C_CHUNK_BATCH_FINISHED);
     }
 
