@@ -3,14 +3,15 @@ package app.afkbot;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
-import android.graphics.Rect;
-import android.graphics.RectF;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RadialGradient;
+import android.graphics.Rect;
+import android.graphics.RectF;
 import android.graphics.Shader;
 import android.graphics.Typeface;
+import android.view.GestureDetector;
 import android.view.MotionEvent;
 import android.view.ScaleGestureDetector;
 import android.view.View;
@@ -19,31 +20,32 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Top-down radar, north up. Draws only entity dots from the bot's tracked list (no terrain),
- * so it costs almost nothing. Pinch to zoom, tap to cycle the range.
+ * Top-down minimap, north up: terrain (one pixel per block column) with entity dots on top.
+ * Drag to pan, pinch to zoom, double-tap to re-centre on yourself.
  */
 public class RadarView extends View {
     static final int C_PLAYER = 0xFFF472B6, C_FRIEND = 0xFF60A5FA, C_HOSTILE = 0xFFF87171, C_ANIMAL = 0xFF34D399,
             C_ITEM = 0xFFFBBF24, C_OTHER = 0xFF8A93A6, C_SELF = 0xFF8B5CF6;
-    private static final float[] STEPS = {16, 32, 64, 128};
 
     private final Paint ring = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint dot = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint label = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint small = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint bg = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint chip = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path path = new Path();
     private final ScaleGestureDetector scaler;
-    private float range = 32;
+    private final GestureDetector gestures;
+    private float range = 32; // blocks from the centre to the nearest edge
+    private float panX, panZ; // view centre offset from the player, in blocks
     private boolean compact;
     boolean showPlayers = true, showHostile = true, showAnimals = true, showItems = true, showOther = false;
-    private boolean scaling;
     Runnable onRangeChanged;
 
-    // terrain image (1 pixel per block), rebuilt only when chunks or our block position change
+    // terrain image (1 pixel per block), rebuilt only when chunks, layer or the centre block change
     private Bitmap terrain;
     private int[] pixels;
-    private int builtVersion = -1, builtX, builtZ, builtR;
+    private int builtVersion = -1, builtX, builtZ, builtR, builtLayer;
     private final Paint bmp = new Paint();
     private final Rect src = new Rect();
     private final RectF dst = new RectF();
@@ -54,18 +56,39 @@ public class RadarView extends View {
         ring.setStyle(Paint.Style.STROKE);
         ring.setStrokeWidth(1.2f * d);
         label.setColor(0xFFE8EAF0);
-        label.setTextSize(11 * d);
+        label.setTextSize(11.5f * d);
         label.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
         label.setShadowLayer(3 * d, 0, 0, Color.BLACK);
-        small.setColor(0xFF8A93A6);
-        small.setTextSize(9.5f * d);
+        small.setColor(0xFFE8EAF0);
+        small.setTextSize(10f * d);
+        small.setShadowLayer(2 * d, 0, 0, Color.BLACK);
+        chip.setColor(0xB30B0D12);
         scaler = new ScaleGestureDetector(c, new ScaleGestureDetector.SimpleOnScaleGestureListener() {
             @Override
             public boolean onScale(ScaleGestureDetector g) {
-                range = Math.max(8, Math.min(256, range / g.getScaleFactor()));
-                scaling = true;
+                setRange(range / g.getScaleFactor());
+                return true;
+            }
+        });
+        gestures = new GestureDetector(c, new GestureDetector.SimpleOnGestureListener() {
+            @Override
+            public boolean onDown(MotionEvent e) {
+                return true;
+            }
+
+            @Override
+            public boolean onScroll(MotionEvent a, MotionEvent b, float dx, float dy) {
+                if (scaler.isInProgress()) return false;
+                float ppb = pixelsPerBlock();
+                panX += dx / ppb;
+                panZ += dy / ppb;
                 invalidate();
-                if (onRangeChanged != null) onRangeChanged.run();
+                return true;
+            }
+
+            @Override
+            public boolean onDoubleTap(MotionEvent e) {
+                recenter();
                 return true;
             }
         });
@@ -80,27 +103,47 @@ public class RadarView extends View {
     }
 
     void setRange(float r) {
-        range = r;
+        range = Math.max(6, Math.min(256, r));
         invalidate();
         if (onRangeChanged != null) onRangeChanged.run();
     }
 
+    void zoom(float factor) {
+        setRange(range * factor);
+    }
+
+    void recenter() {
+        panX = panZ = 0;
+        invalidate();
+    }
+
+    boolean isPanned() {
+        return Math.abs(panX) > 0.5f || Math.abs(panZ) > 0.5f;
+    }
+
+    private float pixelsPerBlock() {
+        float d = getResources().getDisplayMetrics().density;
+        return (Math.min(getWidth(), getHeight()) / 2f - 6 * d) / range;
+    }
+
     @Override
     protected void onMeasure(int w, int h) {
-        int size = MeasureSpec.getSize(w);
-        setMeasuredDimension(size, compact ? Math.round(size * 0.62f) : size);
+        int width = MeasureSpec.getSize(w);
+        if (compact) {
+            setMeasuredDimension(width, Math.round(width * 0.62f));
+        } else {
+            int height = MeasureSpec.getMode(h) == MeasureSpec.UNSPECIFIED ? width : MeasureSpec.getSize(h);
+            setMeasuredDimension(width, height);
+        }
     }
 
     @Override
     public boolean onTouchEvent(MotionEvent e) {
         if (compact) return super.onTouchEvent(e);
+        // keep the page from stealing drags/pinches
+        if (e.getActionMasked() == MotionEvent.ACTION_DOWN && getParent() != null) getParent().requestDisallowInterceptTouchEvent(true);
         scaler.onTouchEvent(e);
-        if (e.getActionMasked() == MotionEvent.ACTION_DOWN) scaling = false;
-        if (e.getActionMasked() == MotionEvent.ACTION_UP && !scaling && e.getPointerCount() == 1) {
-            int i = 0;
-            while (i < STEPS.length && STEPS[i] <= range + 0.5f) i++;
-            setRange(i >= STEPS.length ? STEPS[0] : STEPS[i]);
-        }
+        gestures.onTouchEvent(e);
         return true;
     }
 
@@ -110,112 +153,118 @@ public class RadarView extends View {
         float w = getWidth(), h = getHeight();
         float cx = w / 2f, cy = h / 2f;
         float r = Math.min(w, h) / 2f - 6 * d;
+        float scale = r / range;
+        float radius = 18 * d;
 
         bg.setShader(new RadialGradient(cx, cy, Math.max(w, h) * 0.7f, 0xFF1B2030, 0xFF0B0D12, Shader.TileMode.CLAMP));
-        c.drawRoundRect(0, 0, w, h, 18 * d, 18 * d, bg);
+        c.drawRoundRect(0, 0, w, h, radius, radius, bg);
 
         Bot.Config mc = Hub.config;
         boolean map = World.inWorld && MapData.supported && MapData.chunkCount() > 0 && (mc == null || mc.minimap);
-        if (map) {
-            c.save();
-            path.reset();
-            path.addRoundRect(new RectF(0, 0, w, h), 18 * d, 18 * d, Path.Direction.CW);
-            c.clipPath(path);
-            drawTerrain(c, cx, cy, Math.max(w, h) / 2f, r / range);
-            c.restore();
-        }
+        c.save();
+        path.reset();
+        path.addRoundRect(new RectF(0, 0, w, h), radius, radius, Path.Direction.CW);
+        c.clipPath(path);
+        if (map) drawTerrain(c, cx, cy, w, h, scale);
 
-        // rings + crosshair (faint over the map)
-        for (int i = 1; i <= 4; i++) {
-            if (map && i < 4) continue;
-            ring.setColor(map ? 0x44FFFFFF : i == 4 ? 0x553B4257 : 0x332B3145);
-            c.drawCircle(cx, cy, r * i / 4f, ring);
-        }
-        if (!map) {
-            ring.setColor(0x222B3145);
-            c.drawLine(cx - r, cy, cx + r, cy, ring);
-            c.drawLine(cx, cy - r, cx, cy + r, ring);
-        }
-        if (!compact && !map) {
-            for (int i = 1; i <= 4; i++) {
-                String t = String.format(Locale.US, "%.0f", range * i / 4f);
-                c.drawText(t, cx + 3 * d, cy - r * i / 4f + 11 * d, small);
-            }
-        }
-        // compass letters
-        small.setColor(0xFFB4BCD0);
-        c.drawText("N", cx - 3 * d, cy - r + 12 * d, small);
-        small.setColor(0xFF8A93A6);
+        // where the player is on screen (moves away from the centre when panned)
+        float sx = cx - panX * scale, sy = cy - panZ * scale;
+
+        // distance rings around the player
+        ring.setColor(map ? 0x33FFFFFF : 0x333B4257);
+        for (int i = 1; i <= 2; i++) c.drawCircle(sx, sy, r * i / 2f, ring);
 
         if (!World.inWorld) {
             label.setTextAlign(Paint.Align.CENTER);
+            label.setColor(0xFFE8EAF0);
             c.drawText("Not in a world yet", cx, cy + r / 2, label);
             label.setTextAlign(Paint.Align.LEFT);
-            drawSelf(c, cx, cy, d);
+            drawSelf(c, sx, sy, d);
+            c.restore();
             return;
         }
 
-        Bot.Config cfg = Hub.config;
-        World.Friends friends = cfg != null ? cfg.friendSet() : null;
+        World.Friends friends = mc != null ? mc.friendSet() : null;
         List<World.Dot> dots = World.snapshot(friends);
-        float scale = r / range;
         int drawn = 0;
-        // far-to-near so close things draw on top
-        for (int i = dots.size() - 1; i >= 0; i--) {
+        for (int i = dots.size() - 1; i >= 0; i--) { // far-to-near so close things draw on top
             World.Dot e = dots.get(i);
             if (!visible(e)) continue;
             if (++drawn > 500) break;
-            float px = (float) e.dx * scale, pz = (float) e.dz * scale;
-            float len = (float) Math.sqrt(px * px + pz * pz);
-            boolean edge = len > r;
+            float x = sx + (float) e.dx * scale, y = sy + (float) e.dz * scale;
+            boolean edge = x < 0 || y < 0 || x > w || y > h;
             if (edge && e.kind != 'p') continue;
-            if (edge) {
-                px = px / len * (r - 4 * d);
-                pz = pz / len * (r - 4 * d);
+            if (edge) { // clamp off-screen players to the border so you know where they are
+                x = Math.max(8 * d, Math.min(w - 8 * d, x));
+                y = Math.max(8 * d, Math.min(h - 8 * d, y));
             }
-            float x = cx + px, y = cy + pz;
             int col = color(e);
             dot.setColor(col);
             if (e.kind == 'p') {
-                if (edge) {
-                    c.drawCircle(x, y, 3.5f * d, dot);
-                } else {
-                    dot.setColor(col & 0x40FFFFFF);
+                if (!edge) {
+                    dot.setColor(col & 0x55FFFFFF);
                     c.drawCircle(x, y, 9 * d, dot);
                     dot.setColor(col);
-                    c.drawCircle(x, y, 5 * d, dot);
                 }
-                String t = e.label + (Math.abs(e.dy) > 4 ? (e.dy > 0 ? " ▲" : " ▼") : "");
+                c.drawCircle(x, y, edge ? 4 * d : 5 * d, dot);
+                dot.setColor(Color.WHITE);
+                c.drawCircle(x, y, 1.6f * d, dot);
                 if (!compact || !edge) {
+                    String t = e.label + (Math.abs(e.dy) > 4 ? (e.dy > 0 ? " ▲" : " ▼") : "");
+                    float tx = Math.min(x + 9 * d, w - label.measureText(t) - 4 * d);
                     label.setColor(col);
-                    c.drawText(t, x + 8 * d, y + 4 * d, label);
-                    if (!compact) c.drawText(String.format(Locale.US, "%.0fm", e.dist), x + 8 * d, y + 15 * d, small);
+                    c.drawText(t, tx, y + 4 * d, label);
+                    if (!compact) c.drawText(String.format(Locale.US, "%.0fm", e.dist), tx, y + 16 * d, small);
                 }
             } else {
-                float rad = e.kind == 'i' || e.kind == 'o' ? 2f * d : 3f * d;
+                float rad = e.kind == 'i' || e.kind == 'o' ? 2.2f * d : 3.4f * d;
+                dot.setColor(0xAA000000);
+                c.drawCircle(x, y, rad + 1.2f * d, dot);
+                dot.setColor(col);
                 c.drawCircle(x, y, rad, dot);
             }
         }
-        drawSelf(c, cx, cy, d);
+        drawSelf(c, sx, sy, d);
+
+        // compass + scale overlay
+        if (!compact) {
+            String n = "N ↑";
+            c.drawRoundRect(cx - 18 * d, 8 * d, cx + 18 * d, 28 * d, 10 * d, 10 * d, chip);
+            small.setTextAlign(Paint.Align.CENTER);
+            c.drawText(n, cx, 22 * d, small);
+            String sc = String.format(Locale.US, "%.0f blocks", range);
+            float tw = small.measureText(sc) + 16 * d;
+            c.drawRoundRect(8 * d, h - 28 * d, 8 * d + tw, h - 8 * d, 10 * d, 10 * d, chip);
+            c.drawText(sc, 8 * d + tw / 2, h - 14 * d, small);
+            int ly = MapData.layerY;
+            if (ly != Integer.MIN_VALUE && map) {
+                String lt = "Layer Y " + ly;
+                float lw = small.measureText(lt) + 16 * d;
+                c.drawRoundRect(w - 8 * d - lw, 8 * d, w - 8 * d, 28 * d, 10 * d, 10 * d, chip);
+                c.drawText(lt, w - 8 * d - lw / 2, 22 * d, small);
+            }
+            small.setTextAlign(Paint.Align.LEFT);
+        }
+        c.restore();
     }
 
-    /** Draws the terrain around us; halfWidth = half the view size in pixels, scale = pixels per block. */
-    private void drawTerrain(Canvas c, float cx, float cy, float halfWidth, float scale) {
-        int R = (int) Math.ceil(halfWidth / scale) + 1;
-        R = Math.min(R, 300);
+    /** Draws the terrain image so that block (selfX+panX, selfZ+panZ) is at the view centre. */
+    private void drawTerrain(Canvas c, float cx, float cy, float w, float h, float scale) {
+        int R = (int) Math.ceil(Math.max(w, h) / 2f / scale) + 2;
+        R = Math.min(R, 320);
         int size = R * 2;
-        int bx = (int) Math.floor(World.selfX), bz = (int) Math.floor(World.selfZ);
+        double ox = World.selfX + panX, oz = World.selfZ + panZ;
+        int bx = (int) Math.floor(ox), bz = (int) Math.floor(oz);
         if (terrain == null || terrain.getWidth() != size) {
             terrain = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
             pixels = new int[size * size];
             builtVersion = -1;
         }
-        int ver = MapData.version;
-        if (ver != builtVersion || bx != builtX || bz != builtZ || R != builtR) {
+        int ver = MapData.version, layer = MapData.layerY;
+        if (ver != builtVersion || bx != builtX || bz != builtZ || R != builtR || layer != builtLayer) {
             int x0 = bx - R, z0 = bz - R;
             for (int j = 0; j < size; j++) {
-                int wz = z0 + j;
-                int row = j * size;
+                int wz = z0 + j, row = j * size;
                 for (int i = 0; i < size; i++) {
                     int wx = x0 + i;
                     int col = MapData.colorAt(wx, wz);
@@ -236,32 +285,33 @@ public class RadarView extends View {
             builtX = bx;
             builtZ = bz;
             builtR = R;
+            builtLayer = layer;
         }
-        // our exact position inside the block, so the map scrolls smoothly
-        float fx = (float) (World.selfX - bx), fz = (float) (World.selfZ - bz);
+        float fx = (float) (ox - bx), fz = (float) (oz - bz);
         src.set(0, 0, size, size);
         float left = cx - (R + fx) * scale, top = cy - (R + fz) * scale;
         dst.set(left, top, left + size * scale, top + size * scale);
         bmp.setFilterBitmap(scale < 1.5f);
         c.drawBitmap(terrain, src, dst, bmp);
-        // slight vignette so dots stay readable
-        bg.setShader(new RadialGradient(cx, cy, halfWidth * 1.2f, 0x00000000, 0x66000000, Shader.TileMode.CLAMP));
-        c.drawRect(0, 0, getWidth(), getHeight(), bg);
+        bg.setShader(new RadialGradient(cx, cy, Math.max(w, h) * 0.75f, 0x00000000, 0x55000000, Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, w, h, bg);
     }
 
     private void drawSelf(Canvas c, float cx, float cy, float d) {
         // heading arrow: Minecraft yaw 0 = south (+Z, screen down), 90 = west (-X)
         double yaw = Math.toRadians(World.selfYaw);
         float fx = (float) -Math.sin(yaw), fz = (float) Math.cos(yaw);
-        float s = 9 * d;
+        float s = 10 * d;
         path.reset();
         path.moveTo(cx + fx * s, cy + fz * s);
-        path.lineTo(cx - fx * s * 0.6f + -fz * s * 0.6f, cy - fz * s * 0.6f + fx * s * 0.6f);
+        path.lineTo(cx - fx * s * 0.6f - fz * s * 0.6f, cy - fz * s * 0.6f + fx * s * 0.6f);
         path.lineTo(cx - fx * s * 0.25f, cy - fz * s * 0.25f);
         path.lineTo(cx - fx * s * 0.6f + fz * s * 0.6f, cy - fz * s * 0.6f - fx * s * 0.6f);
         path.close();
-        dot.setColor(0x558B5CF6);
-        c.drawCircle(cx, cy, 13 * d, dot);
+        dot.setColor(0x668B5CF6);
+        c.drawCircle(cx, cy, 14 * d, dot);
+        dot.setColor(Color.WHITE);
+        c.drawCircle(cx, cy, 2 * d, dot);
         dot.setColor(C_SELF);
         c.drawPath(path, dot);
     }

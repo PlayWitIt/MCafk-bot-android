@@ -63,7 +63,13 @@ final class Bot {
         volatile String friends = "";
         // Map / render distance
         volatile boolean minimap = true;
+        volatile boolean view3d = false;
         volatile int viewDistance = 6;
+
+        /** Chunks are only requested while something shows terrain. */
+        boolean wantChunks() {
+            return minimap || view3d;
+        }
 
         float logoutHealth() {
             return autoLog && logHearts > 0 ? logHearts * 2f : 0;
@@ -118,6 +124,7 @@ final class Bot {
     private volatile int selfEntityId = Integer.MIN_VALUE;
     private volatile double nearestPlayer = -1;
     private int sneakTicks;
+    private volatile boolean batchPending;
     private volatile int state;
     private int threshold = -1;
     private Cipher encrypt, decrypt;
@@ -535,6 +542,40 @@ final class Bot {
         send(b);
     }
 
+    /**
+     * Call after turning terrain (map or 3D) on: resumes chunk loading and makes the server resend
+     * nearby chunks by briefly lowering the render distance and raising it again.
+     */
+    void reloadTerrain() {
+        final ScheduledExecutorService t = ticker;
+        if (t == null || state != PLAY) return;
+        t.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    if (batchPending && id(Proto.P_S_CHUNK_BATCH_RECEIVED) >= 0)
+                        send(new Buf(id(Proto.P_S_CHUNK_BATCH_RECEIVED)).f32(20f));
+                    batchPending = false;
+                    int keep = cfg.viewDistance;
+                    cfg.viewDistance = 2;
+                    sendSettings(id(Proto.P_S_SETTINGS));
+                    cfg.viewDistance = keep;
+                } catch (IOException ignored) {
+                }
+            }
+        });
+        t.schedule(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    if (state == PLAY) sendSettings(id(Proto.P_S_SETTINGS));
+                    Hub.log("Reloading terrain around you...");
+                } catch (IOException ignored) {
+                }
+            }
+        }, 1500, TimeUnit.MILLISECONDS);
+    }
+
     /** Re-sends client settings (e.g. after the render distance was changed in the app). */
     void applySettings() {
         final ScheduledExecutorService t = ticker;
@@ -738,7 +779,7 @@ final class Bot {
             }
             return false;
         } else if (pid == id(Proto.P_C_MAP_CHUNK)) {
-            if (cfg.minimap && MapData.supported) {
+            if (MapData.supported) {
                 try {
                     MapData.readChunk(p, proto, World.selfY);
                 } catch (IOException e) {
@@ -751,7 +792,8 @@ final class Bot {
             MapData.unload(cx, cz);
         } else if (pid == id(Proto.P_C_CHUNK_BATCH_FINISHED)) {
             // Only ask for more chunks when the map is on (saves data otherwise).
-            if (cfg.minimap) send(new Buf(id(Proto.P_S_CHUNK_BATCH_RECEIVED)).f32(20f));
+            if (cfg.wantChunks()) send(new Buf(id(Proto.P_S_CHUNK_BATCH_RECEIVED)).f32(20f));
+            else batchPending = true;
         } else if (pid == id(Proto.P_C_PLAYER_INFO)) {
             readPlayerInfo(p);
         } else if (pid == id(Proto.P_C_PLAYER_REMOVE)) {
@@ -1179,7 +1221,7 @@ final class Bot {
                 Proto.P_C_REL_MOVE, Proto.P_C_MOVE_LOOK, Proto.P_C_ENTITY_TELEPORT, Proto.P_C_ENTITY_SYNC, Proto.P_C_RESPAWN,
                 Proto.P_C_PLAYER_INFO, Proto.P_C_PLAYER_REMOVE, Proto.P_C_PLAYER_CHAT};
         for (int k : want) if (ids[k] == pid) return true;
-        if (cfg.minimap && (pid == id(Proto.P_C_MAP_CHUNK) || pid == id(Proto.P_C_UNLOAD_CHUNK))) return true;
+        if (MapData.supported && (pid == id(Proto.P_C_MAP_CHUNK) || pid == id(Proto.P_C_UNLOAD_CHUNK))) return true;
         return pid == id(Proto.P_C_CHUNK_BATCH_FINISHED);
     }
 

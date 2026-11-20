@@ -44,8 +44,9 @@ public class MainActivity extends Activity implements Hub.Listener {
             TEXT = 0xFFE8EAF0, MUTED = 0xFF8A93A6, ACCENT = 0xFF8B5CF6, ACCENT2 = 0xFF22D3EE,
             GOOD = 0xFF34D399, BAD = 0xFFF87171, WARN = 0xFFFBBF24;
 
-    private static final String[] TABS = {"Home", "Map", "Modules", "Chat", "Account"};
-    private static final String[] TAB_ICONS = {"◉", "◎", "☰", "✉", "⚇"};
+    private static final String[] TABS = {"Home", "Map", "3D", "Modules", "Chat", "Account"};
+    private static final String[] TAB_ICONS = {"\u25C9", "\u25CE", "\u25A3", "\u2630", "\u2709", "\u2687"};
+    static final int T_HOME = 0, T_MAP = 1, T_3D = 2, T_MODULES = 3, T_CHAT = 4, T_ACCOUNT = 5;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private FrameLayout pages;
@@ -81,16 +82,20 @@ public class MainActivity extends Activity implements Hub.Listener {
         @Override
         public void run() {
             if (!resumed) return;
-            if (tab == 1) {
+            if (tab == T_3D && view3d != null) {
+                view3d.tick();
+                update3dLifecycle();
+            }
+            if (tab == T_MAP) {
                 radar.invalidate();
                 refreshNearby();
                 String st = MapData.status;
                 int n = MapData.chunkCount();
-                mapInfo.setText(!cfg.minimap ? "Terrain is off - showing entities only." : !World.inWorld ? "" :
+                mapInfo.setText(!cfg.minimap ? "Terrain hidden - showing entities only." : !World.inWorld ? "Start AFK to load the map." :
                         !MapData.supported ? "Terrain isn't available for this server version - showing entities only." :
-                                n + " chunks loaded" + (st.isEmpty() ? "" : "  \u2022  " + st));
+                                n + " chunks  \u2022  drag to move, pinch to zoom, double-tap to re-centre" + (st.isEmpty() ? "" : "  \u2022  " + st));
                 updateViewLabel();
-            } else if (tab == 0) {
+            } else if (tab == T_HOME) {
                 miniRadar.invalidate();
             }
             ui.postDelayed(this, 500); // 2 frames per second is plenty and nearly free
@@ -126,6 +131,7 @@ public class MainActivity extends Activity implements Hub.Listener {
         Hub.addListener(this);
         Auth.wake();
         onChange();
+        update3dLifecycle();
         ui.post(radarTick);
     }
 
@@ -135,6 +141,7 @@ public class MainActivity extends Activity implements Hub.Listener {
         resumed = false;
         ui.removeCallbacks(radarTick);
         Hub.removeListener(this);
+        update3dLifecycle();
         save();
     }
 
@@ -172,9 +179,10 @@ public class MainActivity extends Activity implements Hub.Listener {
         root.addView(pages, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
         pageViews[0] = buildHome();
         pageViews[1] = buildRadar();
-        pageViews[2] = buildModules();
-        pageViews[3] = buildChat();
-        pageViews[4] = buildAccount();
+        pageViews[2] = build3d();
+        pageViews[3] = buildModules();
+        pageViews[4] = buildChat();
+        pageViews[5] = buildAccount();
         for (View v : pageViews) pages.addView(v);
 
         // bottom navigation
@@ -245,6 +253,7 @@ public class MainActivity extends Activity implements Hub.Listener {
             tabIcons[k].setTextColor(k == i ? ACCENT : MUTED);
         }
         onChange();
+        update3dLifecycle();
         if (resumed) {
             ui.removeCallbacks(radarTick);
             ui.post(radarTick);
@@ -294,7 +303,7 @@ public class MainActivity extends Activity implements Hub.Listener {
         View.OnClickListener toRadar = new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                selectTab(1);
+                selectTab(T_MAP);
             }
         };
         rc.setOnClickListener(toRadar);
@@ -326,39 +335,122 @@ public class MainActivity extends Activity implements Hub.Listener {
 
     // ---------------------------------------------------------------- Radar
 
-    private View buildRadar() {
-        LinearLayout col = page();
-        LinearLayout rc = card(col);
-        LinearLayout head = row(rc);
-        head.addView(text("Map", 17, TEXT, true), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-        radarRange = text("", 13, MUTED, false);
-        head.addView(radarRange);
-        rc.addView(text("North is up. Pinch to zoom, tap to change range.", 12, MUTED, false));
-        radar = new RadarView(this);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = dp(10);
-        rc.addView(radar, lp);
-        radar.onRangeChanged = new Runnable() {
-            @Override
-            public void run() {
-                radarRange.setText(String.format(Locale.US, "%.0f block radius", radar.getRange()));
-            }
-        };
-        radar.setRange(32);
+    private TextView layerLabel;
+    private android.widget.SeekBar layerSeek;
+    private TextView surfaceChip, layerChip;
 
-        LinearLayout chips = chipRow(rc);
+    private View buildRadar() {
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setPadding(dp(12), dp(4), dp(12), dp(8));
+
+        // the map fills the top of the page, with zoom / re-centre buttons on top of it
+        FrameLayout frame = new FrameLayout(this);
+        radar = new RadarView(this);
+        frame.addView(radar, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        LinearLayout btns = new LinearLayout(this);
+        btns.setOrientation(LinearLayout.VERTICAL);
+        FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM | Gravity.END);
+        blp.setMargins(0, 0, dp(10), dp(10));
+        frame.addView(btns, blp);
+        mapButton(btns, "+", new Runnable() {
+            public void run() {
+                radar.zoom(0.7f);
+            }
+        });
+        mapButton(btns, "−", new Runnable() {
+            public void run() {
+                radar.zoom(1.43f);
+            }
+        });
+        mapButton(btns, "⌖", new Runnable() {
+            public void run() {
+                radar.recenter();
+            }
+        });
+        radarRange = text("", 1, MUTED, false); // not shown; the map draws its own scale
+        radar.setRange(32);
+        col.addView(frame, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.5f));
+
+        // controls below the map (scroll on their own)
+        LinearLayout ctl = new LinearLayout(this);
+        ctl.setOrientation(LinearLayout.VERTICAL);
+        ScrollView cs = new ScrollView(this);
+        cs.addView(ctl);
+        col.addView(cs, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        LinearLayout chips = chipRow(ctl);
         legendChip(chips, "Players", RadarView.C_PLAYER, 0);
         legendChip(chips, "Hostile", RadarView.C_HOSTILE, 1);
         legendChip(chips, "Animals", RadarView.C_ANIMAL, 2);
         legendChip(chips, "Items", RadarView.C_ITEM, 3);
         legendChip(chips, "Other", RadarView.C_OTHER, 4);
         mapInfo = text("", 12, MUTED, false);
-        mapInfo.setPadding(0, dp(8), 0, 0);
-        rc.addView(mapInfo);
+        mapInfo.setPadding(dp(2), dp(6), 0, 0);
+        ctl.addView(mapInfo);
+
+        // view height: surface, or a chosen Y layer
+        LinearLayout lc = card(ctl);
+        LinearLayout lh = chipRow(lc);
+        surfaceChip = text("Surface", 13, TEXT, false);
+        layerChip = text("Layer (Y level)", 13, TEXT, false);
+        for (TextView t : new TextView[]{surfaceChip, layerChip}) {
+            t.setPadding(dp(12), dp(7), dp(12), dp(7));
+            LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            clp.setMargins(0, 0, dp(6), 0);
+            lh.addView(t, clp);
+        }
+        final TextView myY = text("My Y", 13, TEXT, false);
+        myY.setPadding(dp(12), dp(7), dp(12), dp(7));
+        myY.setBackground(round(SURFACE2, dp(20), STROKE));
+        lh.addView(myY);
+        layerLabel = text("", 13, MUTED, false);
+        lc.addView(layerLabel);
+        layerSeek = new android.widget.SeekBar(this);
+        layerSeek.setMax(384); // Y -64 .. 320
+        layerSeek.setProgress(64 + 64);
+        layerSeek.setProgressTintList(ColorStateList.valueOf(ACCENT));
+        layerSeek.setThumbTintList(ColorStateList.valueOf(ACCENT2));
+        lc.addView(layerSeek);
+        surfaceChip.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                MapData.layerY = Integer.MIN_VALUE;
+                updateLayerUi();
+            }
+        });
+        layerChip.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                MapData.layerY = layerSeek.getProgress() - 64;
+                updateLayerUi();
+            }
+        });
+        myY.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                int y = (int) Math.floor(World.selfY);
+                layerSeek.setProgress(Math.max(0, Math.min(384, y + 64)));
+                MapData.layerY = y;
+                updateLayerUi();
+            }
+        });
+        layerSeek.setOnSeekBarChangeListener(new android.widget.SeekBar.OnSeekBarChangeListener() {
+            public void onProgressChanged(android.widget.SeekBar sb, int v, boolean user) {
+                if (user) {
+                    MapData.layerY = v - 64;
+                    updateLayerUi();
+                }
+            }
+
+            public void onStartTrackingTouch(android.widget.SeekBar sb) {
+            }
+
+            public void onStopTrackingTouch(android.widget.SeekBar sb) {
+            }
+        });
+        updateLayerUi();
 
         // render distance + terrain
-        LinearLayout vc = card(col);
-        vc.addView(text("Render distance", 16, TEXT, true));
+        LinearLayout vc = card(ctl);
+        vc.addView(text("Render distance", 15, TEXT, true));
         viewLabel = text("", 13, MUTED, false);
         vc.addView(viewLabel);
         final android.widget.SeekBar seek = new android.widget.SeekBar(this);
@@ -366,45 +458,140 @@ public class MainActivity extends Activity implements Hub.Listener {
         seek.setProgress(Math.max(0, Math.min(14, cfg.viewDistance - 2)));
         seek.setProgressTintList(ColorStateList.valueOf(ACCENT));
         seek.setThumbTintList(ColorStateList.valueOf(ACCENT2));
-        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        slp.topMargin = dp(8);
-        vc.addView(seek, slp);
+        vc.addView(seek);
         seek.setOnSeekBarChangeListener(new android.widget.SeekBar.OnSeekBarChangeListener() {
-            @Override
             public void onProgressChanged(android.widget.SeekBar sb, int v, boolean user) {
                 cfg.viewDistance = v + 2;
                 updateViewLabel();
             }
 
-            @Override
             public void onStartTrackingTouch(android.widget.SeekBar sb) {
             }
 
-            @Override
             public void onStopTrackingTouch(android.widget.SeekBar sb) {
                 save();
                 Bot b = Hub.bot;
                 if (b != null) b.applySettings();
             }
         });
-        vc.addView(text("How many chunks around you the server sends. Higher shows more of the map but uses more mobile data and battery. The server can lower it.", 12, MUTED, false));
+        vc.addView(text("Chunks around you the server sends. Higher shows more but uses more data and battery. The server can lower it.", 12, MUTED, false));
         LinearLayout tr = chipRow(vc);
-        optionChip(tr, "Show terrain on the map", cfg.minimap, new Toggle() {
+        optionChip(tr, "Show terrain", cfg.minimap, new Toggle() {
             public void set(boolean v) {
                 cfg.minimap = v;
-                if (!v) MapData.clear();
-                Hub.log(v ? "Map terrain on (fills in as the server sends chunks; reconnect to load everything)" : "Map terrain off");
+                if (v) {
+                    Bot b = Hub.bot;
+                    if (b != null) b.reloadTerrain();
+                } else {
+                    Hub.log("Map terrain hidden (stored terrain is kept)");
+                }
             }
         });
         updateViewLabel();
 
-        LinearLayout nc = card(col);
+        LinearLayout nc = card(ctl);
         nc.addView(text("Nearby", 15, TEXT, true));
-        nearbyList = text("", 13, TEXT, false);
+        nearbyList = text("", 12, TEXT, false);
         nearbyList.setTypeface(Typeface.MONOSPACE);
         nearbyList.setPadding(0, dp(6), 0, 0);
         nc.addView(nearbyList);
-        return scroll(col);
+        return col;
+    }
+
+    private void mapButton(LinearLayout parent, String label, final Runnable r) {
+        TextView b = text(label, 20, TEXT, true);
+        b.setGravity(Gravity.CENTER);
+        b.setBackground(round(0xCC141821, dp(12), STROKE));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(44), dp(44));
+        lp.topMargin = dp(8);
+        parent.addView(b, lp);
+        b.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                r.run();
+            }
+        });
+    }
+
+    private void updateLayerUi() {
+        boolean layer = MapData.layerY != Integer.MIN_VALUE;
+        styleChip(surfaceChip, ACCENT, !layer);
+        styleChip(layerChip, ACCENT, layer);
+        layerSeek.setAlpha(layer ? 1f : 0.4f);
+        layerLabel.setText(layer ? "Showing the first solid block at or below Y " + MapData.layerY + " (caves, tunnels, bases)"
+                : "Showing the top block of every column. Pick Layer to look underground.");
+        if (radar != null) radar.invalidate();
+    }
+
+    // ---------------------------------------------------------------- 3D
+
+    private FrameLayout holder3d;
+    private World3DView view3d;
+    private TextView info3d;
+    private int radius3d = 16;
+
+    private View build3d() {
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setPadding(dp(12), dp(4), dp(12), dp(8));
+        LinearLayout c = module(col, "3D view", "See the real blocks around you to check you're safe. Drag to orbit, pinch to zoom. Uses the GPU only while this tab is open.", cfg.view3d, new Toggle() {
+            public void set(boolean v) {
+                cfg.view3d = v;
+                if (v) {
+                    Bot b = Hub.bot;
+                    if (b != null && !cfg.minimap) b.reloadTerrain();
+                }
+                update3dLifecycle();
+            }
+        });
+        LinearLayout rr = chipRow(c);
+        final TextView[] chips = new TextView[4];
+        final int[] radii = {12, 16, 24, 32};
+        for (int i = 0; i < 4; i++) {
+            final int r = radii[i];
+            final TextView t = text(r + " blocks", 13, TEXT, false);
+            t.setPadding(dp(12), dp(7), dp(12), dp(7));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.setMargins(0, 0, dp(6), 0);
+            rr.addView(t, lp);
+            chips[i] = t;
+            styleChip(t, ACCENT, r == radius3d);
+            t.setOnClickListener(new View.OnClickListener() {
+                public void onClick(View v) {
+                    for (int k = 0; k < 4; k++) styleChip(chips[k], ACCENT, radii[k] == r);
+                    radius3d = r;
+                    if (view3d != null) view3d.radius = r;
+                }
+            });
+        }
+        holder3d = new FrameLayout(this);
+        holder3d.setBackground(round(SURFACE, dp(16), STROKE));
+        LinearLayout.LayoutParams hl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1);
+        hl.topMargin = dp(12);
+        col.addView(holder3d, hl);
+        info3d = text("", 13, MUTED, false);
+        info3d.setGravity(Gravity.CENTER);
+        info3d.setPadding(dp(20), dp(20), dp(20), dp(20));
+        holder3d.addView(info3d, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        return col;
+    }
+
+    /** Creates the GL view only while the 3D tab is visible and switched on; destroys it otherwise. */
+    private void update3dLifecycle() {
+        if (holder3d == null || cfg == null) return;
+        boolean want = cfg.view3d && tab == T_3D && resumed;
+        if (want && view3d == null) {
+            view3d = new World3DView(this);
+            view3d.radius = radius3d;
+            holder3d.addView(view3d, 0, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            view3d.tick();
+        } else if (!want && view3d != null) {
+            view3d.onPause();
+            holder3d.removeView(view3d);
+            view3d = null;
+        }
+        boolean showInfo = view3d == null || !World.inWorld;
+        info3d.setText(!cfg.view3d ? "3D view is off. Turn it on above." : !World.inWorld ? "Start AFK to see the world around you." : "");
+        info3d.setVisibility(showInfo ? View.VISIBLE : View.GONE);
     }
 
     private void updateViewLabel() {
@@ -894,7 +1081,7 @@ public class MainActivity extends Activity implements Hub.Listener {
             StringBuilder sb = new StringBuilder();
             for (String l : Hub.recentLog(7)) sb.append(l).append('\n');
             recent.setText(sb.length() == 0 ? "Nothing yet." : sb.toString().trim());
-        } else if (tab == 3) {
+        } else if (tab == T_CHAT) {
             int v = Hub.chatVersion;
             if (v != shownChat) {
                 shownChat = v;
@@ -907,7 +1094,7 @@ public class MainActivity extends Activity implements Hub.Listener {
                     }
                 });
             }
-        } else if (tab == 4) {
+        } else if (tab == T_ACCOUNT) {
             updateAccount();
         }
     }
@@ -964,12 +1151,12 @@ public class MainActivity extends Activity implements Hub.Listener {
         save();
         if (cfg.address.trim().isEmpty()) {
             toast("Enter the server address in Account first");
-            selectTab(4);
+            selectTab(T_ACCOUNT);
             return;
         }
         if (!cfg.offline && Auth.signedInName(this) == null) {
             toast("Sign in with Microsoft first");
-            selectTab(4);
+            selectTab(T_ACCOUNT);
             return;
         }
         Hub.running = true;

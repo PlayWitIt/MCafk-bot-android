@@ -17,7 +17,14 @@ final class MapData {
     static final class Chunk {
         final int[] color = new int[256]; // RGB, 0 = unknown
         final short[] height = new short[256]; // relative block height of the top block
+        Section[] secs; // full block data (palette-compressed) for layer view and 3D view
+        int layerY = Integer.MIN_VALUE; // cached layer slice
+        int[] layerColor;
+        short[] layerHeight;
     }
+
+    /** World Y to show in layer mode, or Integer.MIN_VALUE for the surface. */
+    static volatile int layerY = Integer.MIN_VALUE;
 
     private static final Map<Long, Chunk> CHUNKS = new ConcurrentHashMap<Long, Chunk>();
     static volatile int version;
@@ -60,6 +67,9 @@ final class MapData {
             blockColor[i] = Proto.COLORS[t.charAt(i * 2 + 1) - 32];
         }
         lengthPrefix = proto < 770;
+        int[] cache = new int[n > 0 ? minStates[n - 1] + 4096 : 0];
+        Arrays.fill(cache, -2);
+        stateCache = cache;
         supported = n > 0;
         clear();
     }
@@ -71,7 +81,21 @@ final class MapData {
         clear();
     }
 
+    private static int[] stateCache = new int[0];
+
     private static int colorOfState(int state) {
+        int[] cache = stateCache;
+        if (state >= 0 && state < cache.length) {
+            int v = cache[state];
+            if (v != -2) return v;
+            v = lookupColor(state);
+            cache[state] = v;
+            return v;
+        }
+        return lookupColor(state);
+    }
+
+    private static int lookupColor(int state) {
         int i = Arrays.binarySearch(minStates, state);
         if (i < 0) i = -i - 2;
         return i >= 0 && i < blockColor.length ? blockColor[i] : 0x8A8A8A;
@@ -93,15 +117,71 @@ final class MapData {
         if (changed) version++;
     }
 
-    /** Colour at a world block position (0 = unknown). */
+    static Chunk chunk(int cx, int cz) {
+        return CHUNKS.get(key(cx, cz));
+    }
+
+    /** Colour at a world block position for the current mode (0 = unknown). */
     static int colorAt(int x, int z) {
         Chunk c = CHUNKS.get(key(x >> 4, z >> 4));
-        return c == null ? 0 : c.color[(z & 15) * 16 + (x & 15)];
+        if (c == null) return 0;
+        int i = (z & 15) * 16 + (x & 15);
+        int ly = layerY;
+        if (ly == Integer.MIN_VALUE || c.secs == null) return c.color[i];
+        ensureLayer(c, ly);
+        return c.layerColor[i];
     }
 
     static int heightAt(int x, int z) {
         Chunk c = CHUNKS.get(key(x >> 4, z >> 4));
-        return c == null ? Integer.MIN_VALUE : c.height[(z & 15) * 16 + (x & 15)];
+        if (c == null) return Integer.MIN_VALUE;
+        int i = (z & 15) * 16 + (x & 15);
+        int ly = layerY;
+        if (ly == Integer.MIN_VALUE || c.secs == null) return c.height[i];
+        ensureLayer(c, ly);
+        return c.layerHeight[i];
+    }
+
+    /** Computes (once per Y) the first solid block at or below layer Y for every column of the chunk. */
+    private static void ensureLayer(Chunk c, int ly) {
+        if (c.layerY == ly && c.layerColor != null) return;
+        int[] col = new int[256];
+        short[] hh = new short[256];
+        int rel = ly - minY;
+        for (int z = 0; z < 16; z++) {
+            for (int x = 0; x < 16; x++) {
+                int i = z * 16 + x, found = 0, fy = 0;
+                for (int y = Math.min(rel, c.secs.length * 16 - 1); y >= 0 && y >= rel - 96; y--) {
+                    int st = blockAt(c.secs, x, y, z);
+                    if (st < 0) break;
+                    int k = colorOfState(st);
+                    if (k != 0) {
+                        found = k == WATER ? waterShade(c.secs, x, y, z) : k;
+                        fy = y;
+                        break;
+                    }
+                }
+                col[i] = found;
+                hh[i] = (short) fy;
+            }
+        }
+        c.layerColor = col;
+        c.layerHeight = hh;
+        c.layerY = ly;
+    }
+
+    static final int WATER = 0x3F76E4;
+
+    /**
+     * Colour of the block at a world position: RGB, 0 for air/transparent, -1 if unknown (chunk not loaded).
+     */
+    static int blockColor(int wx, int wy, int wz) {
+        Chunk c = CHUNKS.get(key(wx >> 4, wz >> 4));
+        if (c == null || c.secs == null) return -1;
+        int y = wy - minY;
+        if (y < 0 || y >= c.secs.length * 16) return 0;
+        int st = blockAt(c.secs, wx & 15, y, wz & 15);
+        return st < 0 ? 0 : colorOfState(st);
     }
 
     // ============================================================ chunk packet parsing
@@ -142,7 +222,7 @@ final class MapData {
                         if (k != 0) {
                             col = k;
                             top = y;
-                            if (k == 0x3F76E4) col = waterShade(sections, x, y, z);
+                            if (k == WATER) col = waterShade(sections, x, y, z);
                             break;
                         }
                     }
@@ -155,6 +235,7 @@ final class MapData {
                 c.height[i] = (short) Math.max(0, top);
             }
         }
+        c.secs = sections;
         CHUNKS.put(key(cx, cz), c);
         version++;
         status = sections != null ? "" : "Terrain colours unavailable for this server version (showing height only)";
@@ -164,7 +245,7 @@ final class MapData {
         int depth = 0;
         for (int yy = y - 1; yy >= 0 && depth < 12; yy--, depth++) {
             int st = blockAt(s, x, yy, z);
-            if (st < 0 || colorOfState(st) != 0x3F76E4) break;
+            if (st < 0 || colorOfState(st) != WATER) break;
         }
         int f = 255 - Math.min(depth, 12) * 9;
         return (0x3F * f / 255) << 16 | (0x76 * f / 255) << 8 | (0xE4 * f / 255);
@@ -250,7 +331,7 @@ final class MapData {
 
     // ----- chunk sections -----
 
-    private static final class Section {
+    static final class Section {
         int single = -1;
         int[] palette;
         long[] data;
