@@ -134,6 +134,10 @@ final class Bot {
     volatile boolean manual;
     volatile float inForward, inStrafe, lookYaw, lookPitch;
     volatile boolean inJump, inSneak, inSprint;
+    // auto-walk target (used by "Go through" for button-operated doors)
+    private volatile double goalX = Double.NaN, goalZ;
+    private volatile long goalUntil;
+    private volatile boolean manualBeforeGoal;
     private boolean onGroundM = true, wasSneak, wasSprint, inWater, hCollideM;
     private int lastInputFlags = -1;
     private double vxM, vyM, vzM;
@@ -294,6 +298,61 @@ final class Bot {
         if (s == null) return "";
         int i = s.indexOf('\n');
         return i < 0 ? s : s.substring(0, i);
+    }
+
+    /** Walks in a straight line to (x, z) for at most ms milliseconds (stops early when there). */
+    void walkTo(double gx, double gz, long ms) {
+        if (Double.isNaN(goalX)) manualBeforeGoal = manual; // remember whether you were driving
+        goalZ = gz;
+        goalUntil = System.currentTimeMillis() + ms;
+        goalX = gx;
+        manual = true;
+    }
+
+    /**
+     * Presses the button/lever that works a door, then walks through the doorway before it closes.
+     * Returns a message for the user.
+     */
+    String goThroughDoor(final int[] door) {
+        final int st = MapData.stateAt(door[0], door[1], door[2]);
+        if (Shapes.type(st) != Shapes.DOOR && Shapes.type(st) != Shapes.GATE && Shapes.type(st) != Shapes.TRAPDOOR) return "That isn't a door";
+        // nearest button or lever within 3 blocks of the door that we can reach
+        int[] best = null;
+        double bestD = 1e9;
+        for (int dx = -3; dx <= 3; dx++)
+            for (int dy = -2; dy <= 3; dy++)
+                for (int dz = -3; dz <= 3; dz++) {
+                    int bx = door[0] + dx, by = door[1] + dy, bz = door[2] + dz;
+                    int t = Shapes.type(MapData.stateAt(bx, by, bz));
+                    if (t != Shapes.BUTTON && t != Shapes.LEVER) continue;
+                    int[] b = {bx, by, bz, 1};
+                    double r = World.reach(b);
+                    if (r <= 4.5 && r < bestD) {
+                        bestD = r;
+                        best = b;
+                    }
+                }
+        boolean open = "true".equals(Shapes.prop(st, "open"));
+        if (best == null && !open) return "No button or lever within reach of this door - walk closer to the button";
+        if (best != null && !open) useBlock(best[0], best[1], best[2], faceToward(best));
+        // walk through along the door's axis, to the far side
+        String facing = Shapes.prop(st, "facing");
+        boolean alongZ = "north".equals(facing) || "south".equals(facing);
+        double cx = door[0] + 0.5, cz = door[2] + 0.5;
+        double gx = cx, gz = cz;
+        if (alongZ) gz = cz + (World.selfZ < cz ? 1.3 : -1.3);
+        else gx = cx + (World.selfX < cx ? 1.3 : -1.3);
+        final double fgx = gx, fgz = gz;
+        final ScheduledExecutorService t = ticker;
+        if (t == null) return "Not connected";
+        // wait a moment for the door to open, then go
+        t.schedule(new Runnable() {
+            @Override
+            public void run() {
+                walkTo(fgx, fgz, 2500);
+            }
+        }, best != null && !open ? 250 : 0, TimeUnit.MILLISECONDS);
+        return best != null && !open ? "Pressing the button and walking through..." : "Walking through...";
     }
 
     /** Makes the bot do its anti-AFK action right now (used by mods). */
@@ -1404,6 +1463,20 @@ final class Bot {
             if (!havePos || respawnPending) return;
             tick++;
             long now = System.currentTimeMillis();
+            if (!Double.isNaN(goalX)) {
+                // steer straight at the goal; stop when there or out of time
+                double gdx = goalX - x, gdz = goalZ - z;
+                if (Math.sqrt(gdx * gdx + gdz * gdz) < 0.2 || now > goalUntil) {
+                    goalX = Double.NaN;
+                    inForward = 0;
+                    manual = manualBeforeGoal;
+                } else {
+                    lookYaw = (float) Math.toDegrees(Math.atan2(-gdx, gdz));
+                    lookPitch = 0;
+                    inForward = 1;
+                    inStrafe = 0;
+                }
+            }
             if (manual) {
                 jumping = false;
                 ground = physicsStep();

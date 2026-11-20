@@ -1656,9 +1656,22 @@ public class MainActivity extends Activity implements Hub.Listener {
                 state = "true".equals(Shapes.prop(st, "open")) ? " (open)" : " (closed)";
             if (t == Shapes.LEVER) state = "true".equals(Shapes.prop(st, "powered")) ? " (on)" : " (off)";
             LinearLayout r = row(usableList);
-            String hint = iron && (t == Shapes.DOOR || t == Shapes.TRAPDOOR) ? "\nneeds a button, lever or pressure plate" : "";
+            String hint = iron && (t == Shapes.DOOR || t == Shapes.TRAPDOOR) ? "\nopened by a button or lever - tap Go through" : "";
             r.addView(text(String.format(Locale.US, "%s%s  \u2022  %.1f m%s", name, state, dist, hint), 13, dist <= 4.5 ? TEXT : MUTED, false),
                     new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+            if (t == Shapes.DOOR || t == Shapes.GATE) {
+                Button go = smallButton("Go through", iron ? ACCENT : SURFACE2);
+                LinearLayout.LayoutParams glp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(36));
+                glp.rightMargin = dp(6);
+                go.setLayoutParams(glp);
+                r.addView(go);
+                go.setOnClickListener(new View.OnClickListener() {
+                    public void onClick(View v) {
+                        Bot bb = Hub.bot;
+                        if (bb != null) toast(bb.goThroughDoor(blk));
+                    }
+                });
+            }
             if (iron && (t == Shapes.DOOR || t == Shapes.TRAPDOOR)) continue;
             Button use = smallButton(dist <= 4.5 ? (t == Shapes.BUTTON ? "Press" : t == Shapes.LEVER ? "Flip" : "Use") : "Too far", dist <= 4.5 ? ACCENT : SURFACE2);
             use.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(36)));
