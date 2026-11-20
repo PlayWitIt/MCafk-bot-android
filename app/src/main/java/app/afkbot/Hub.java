@@ -40,6 +40,7 @@ final class Hub {
     static volatile float statHealth = 20;
     static volatile String statPos = "-", statUptime = "-", statNextAction = "-", statNearest = "none";
     static volatile int statActions;
+    static volatile int serverViewDistance;
     /** The running bot (for sending chat), or null. */
     static volatile Bot bot;
     static volatile Bot.Config config;

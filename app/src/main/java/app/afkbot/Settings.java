@@ -39,6 +39,8 @@ final class Settings {
         c.rejoinMinutes = p.getInt("rejoinMinutes", p.getInt("safetyRejoinMinutes", 0));
         c.visualRange = p.getBoolean("visualRange", true);
         c.friends = p.getString("friends", "");
+        c.minimap = p.getBoolean("minimap", true);
+        c.viewDistance = p.getInt("viewDistance", 6);
         return c;
     }
 
@@ -63,6 +65,8 @@ final class Settings {
                 .putInt("rejoinMinutes", c.rejoinMinutes)
                 .putBoolean("visualRange", c.visualRange)
                 .putString("friends", c.friends)
+                .putBoolean("minimap", c.minimap)
+                .putInt("viewDistance", c.viewDistance)
                 .apply();
     }
 }

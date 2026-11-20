@@ -1,7 +1,10 @@
 package app.afkbot;
 
 import android.content.Context;
+import android.graphics.Bitmap;
 import android.graphics.Canvas;
+import android.graphics.Rect;
+import android.graphics.RectF;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
@@ -36,6 +39,14 @@ public class RadarView extends View {
     boolean showPlayers = true, showHostile = true, showAnimals = true, showItems = true, showOther = false;
     private boolean scaling;
     Runnable onRangeChanged;
+
+    // terrain image (1 pixel per block), rebuilt only when chunks or our block position change
+    private Bitmap terrain;
+    private int[] pixels;
+    private int builtVersion = -1, builtX, builtZ, builtR;
+    private final Paint bmp = new Paint();
+    private final Rect src = new Rect();
+    private final RectF dst = new RectF();
 
     public RadarView(Context c) {
         super(c);
@@ -103,15 +114,29 @@ public class RadarView extends View {
         bg.setShader(new RadialGradient(cx, cy, Math.max(w, h) * 0.7f, 0xFF1B2030, 0xFF0B0D12, Shader.TileMode.CLAMP));
         c.drawRoundRect(0, 0, w, h, 18 * d, 18 * d, bg);
 
-        // rings + crosshair
+        Bot.Config mc = Hub.config;
+        boolean map = World.inWorld && MapData.supported && MapData.chunkCount() > 0 && (mc == null || mc.minimap);
+        if (map) {
+            c.save();
+            path.reset();
+            path.addRoundRect(new RectF(0, 0, w, h), 18 * d, 18 * d, Path.Direction.CW);
+            c.clipPath(path);
+            drawTerrain(c, cx, cy, Math.max(w, h) / 2f, r / range);
+            c.restore();
+        }
+
+        // rings + crosshair (faint over the map)
         for (int i = 1; i <= 4; i++) {
-            ring.setColor(i == 4 ? 0x553B4257 : 0x332B3145);
+            if (map && i < 4) continue;
+            ring.setColor(map ? 0x44FFFFFF : i == 4 ? 0x553B4257 : 0x332B3145);
             c.drawCircle(cx, cy, r * i / 4f, ring);
         }
-        ring.setColor(0x222B3145);
-        c.drawLine(cx - r, cy, cx + r, cy, ring);
-        c.drawLine(cx, cy - r, cx, cy + r, ring);
-        if (!compact) {
+        if (!map) {
+            ring.setColor(0x222B3145);
+            c.drawLine(cx - r, cy, cx + r, cy, ring);
+            c.drawLine(cx, cy - r, cx, cy + r, ring);
+        }
+        if (!compact && !map) {
             for (int i = 1; i <= 4; i++) {
                 String t = String.format(Locale.US, "%.0f", range * i / 4f);
                 c.drawText(t, cx + 3 * d, cy - r * i / 4f + 11 * d, small);
@@ -172,6 +197,56 @@ public class RadarView extends View {
             }
         }
         drawSelf(c, cx, cy, d);
+    }
+
+    /** Draws the terrain around us; halfWidth = half the view size in pixels, scale = pixels per block. */
+    private void drawTerrain(Canvas c, float cx, float cy, float halfWidth, float scale) {
+        int R = (int) Math.ceil(halfWidth / scale) + 1;
+        R = Math.min(R, 300);
+        int size = R * 2;
+        int bx = (int) Math.floor(World.selfX), bz = (int) Math.floor(World.selfZ);
+        if (terrain == null || terrain.getWidth() != size) {
+            terrain = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+            pixels = new int[size * size];
+            builtVersion = -1;
+        }
+        int ver = MapData.version;
+        if (ver != builtVersion || bx != builtX || bz != builtZ || R != builtR) {
+            int x0 = bx - R, z0 = bz - R;
+            for (int j = 0; j < size; j++) {
+                int wz = z0 + j;
+                int row = j * size;
+                for (int i = 0; i < size; i++) {
+                    int wx = x0 + i;
+                    int col = MapData.colorAt(wx, wz);
+                    if (col == 0) {
+                        pixels[row + i] = 0xFF0E1117;
+                        continue;
+                    }
+                    int hh = MapData.heightAt(wx, wz), hn = MapData.heightAt(wx, wz - 1);
+                    float f = hn == Integer.MIN_VALUE ? 1f : hh > hn ? 1.12f : hh < hn ? 0.80f : 0.95f;
+                    int rr = Math.min(255, (int) (((col >> 16) & 255) * f));
+                    int gg = Math.min(255, (int) (((col >> 8) & 255) * f));
+                    int b2 = Math.min(255, (int) ((col & 255) * f));
+                    pixels[row + i] = 0xFF000000 | rr << 16 | gg << 8 | b2;
+                }
+            }
+            terrain.setPixels(pixels, 0, size, 0, 0, size, size);
+            builtVersion = ver;
+            builtX = bx;
+            builtZ = bz;
+            builtR = R;
+        }
+        // our exact position inside the block, so the map scrolls smoothly
+        float fx = (float) (World.selfX - bx), fz = (float) (World.selfZ - bz);
+        src.set(0, 0, size, size);
+        float left = cx - (R + fx) * scale, top = cy - (R + fz) * scale;
+        dst.set(left, top, left + size * scale, top + size * scale);
+        bmp.setFilterBitmap(scale < 1.5f);
+        c.drawBitmap(terrain, src, dst, bmp);
+        // slight vignette so dots stay readable
+        bg.setShader(new RadialGradient(cx, cy, halfWidth * 1.2f, 0x00000000, 0x66000000, Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, getWidth(), getHeight(), bg);
     }
 
     private void drawSelf(Canvas c, float cx, float cy, float d) {

@@ -69,8 +69,59 @@ SPEC=[
  ('P_S_CHAT_MESSAGE','play','toServer',['chat_message','chat']),
  ('P_S_ENTITY_ACTION','play','toServer',['entity_action']),
  ('P_S_PLAYER_INPUT','play','toServer',['player_input']),
+ ('P_C_MAP_CHUNK','play','toClient',['map_chunk']),
+ ('P_C_UNLOAD_CHUNK','play','toClient',['unload_chunk']),
+ ('P_C_CHUNK_BATCH_FINISHED','play','toClient',['chunk_batch_finished']),
+ ('P_S_CHUNK_BATCH_RECEIVED','play','toServer',['chunk_batch_received']),
 ]
-rows=[];seen=set();names={};player_types={};entity_kinds={};entity_names={}
+
+# ---- map colours (approximate, like a vanilla map) ----
+COLORS = {}
+DYES = {'white':0xE9ECEC,'orange':0xF07613,'magenta':0xBD44B3,'light_blue':0x3AAFD9,'yellow':0xF8C627,'lime':0x70B919,
+        'pink':0xED8DAC,'gray':0x3E4447,'light_gray':0x8E8E86,'cyan':0x158991,'purple':0x792AAC,'blue':0x35399D,
+        'brown':0x724728,'green':0x546D1B,'red':0xA12722,'black':0x141519}
+TRANSPARENT_WORDS = ('air','light','barrier','structure_void','torch','button','pressure_plate','rail','sign','banner',
+    'lever','tripwire','redstone_wire','flower_pot','candle','vine','ladder','string','cobweb','fire','head','skull',
+    'carpet','pane','bars','chain','lantern','rod','pointed_dripstone','amethyst_bud','cluster','sapling','frogspawn','moss_carpet')
+PLANTS = ('short_grass','tall_grass','grass','fern','dandelion','poppy','orchid','allium','azure','tulip','daisy','cornflower',
+    'lily_of_the_valley','wither_rose','sunflower','lilac','rose_bush','peony','bush','dead_bush','sweet_berry','torchflower','pitcher',
+    'mushroom','roots','sprouts','fungus','petals','leaf_litter','firefly','cactus_flower','eyeblossom','wildflowers')
+def color_for(n):
+    if n in ('air','cave_air','void_air'): return 0
+    if n=='water' or 'kelp' in n or 'seagrass' in n or n=='bubble_column': return 0x3F76E4
+    if n=='lava': return 0xD96415
+    if n=='grass_block': return 0x7CBD6B
+    WOODS=('oak','spruce','birch','jungle','acacia','dark_oak','mangrove','cherry','pale_oak')
+    if any(n.startswith(w+'_') for w in WOODS) and any(k in n for k in ('stairs','slab','fence','door','planks')):
+        return 0xA88654
+    for d,c in sorted(DYES.items(), key=lambda kv:-len(kv[0])):
+        if n.startswith(d+'_') and any(w in n for w in ('wool','concrete','terracotta','glass','shulker','bed','candle')):
+            return c
+    if any(n==w or n.endswith('_'+w) or n.startswith(w+'_') or ('_'+w+'_') in n for w in TRANSPARENT_WORDS): return 0
+    if any(w in n for w in PLANTS): return 0x5E9C40
+    rules = [
+        ('grass_block',0x7CBD6B),('snow',0xF0F8FF),('powder_snow',0xF0F8FF),('ice',0xA0C8FF),('red_sand',0xBE6621),
+        ('sandstone',0xD8CB9A),('sand',0xDBD3A0),('gravel',0x8C8580),('podzol',0x7B5835),('mycelium',0x6F6265),
+        ('dirt_path',0x947A4A),('farmland',0x6F4E2B),('mud_brick',0x8B6E5C),('mud',0x3C3A3D),('dirt',0x8B6A45),
+        ('clay',0xA0A6B4),('moss',0x5A7A2E),('cherry_leaves',0xE8A6C4),('azalea',0x5D7A2E),('leaves',0x48782F),
+        ('crimson',0x7B2E3A),('warped',0x2A7A72),('nether_wart',0x7B1E1E),('netherrack',0x6F3131),('nether_brick',0x2C1517),
+        ('soul',0x524035),('basalt',0x4E4E54),('blackstone',0x2A2328),('glowstone',0xF5D26B),('shroomlight',0xF2A04B),
+        ('end_stone',0xDBDE9E),('purpur',0xA77BA7),('obsidian',0x15101F),('bedrock',0x3A3A3A),('magma',0x8E3E1A),
+        ('terracotta',0x9A5F45),('_log',0x6B5235),('_wood',0x6B5235),('_stem',0x6B5235),('hyphae',0x6B5235),
+        ('bamboo',0x7DA33A),('planks',0xA88654),('_slab',0x9A9A9A),('_stairs',0x9A9A9A),('fence',0xA88654),('door',0xA88654),
+        ('cactus',0x2F7A2F),('pumpkin',0xE38A1D),('melon',0x7DAA2B),('hay',0xC9A426),('lily_pad',0x208030),
+        ('sugar_cane',0x8BC36A),('glass',0xC8E6EE),('diorite',0xBDBDBD),('granite',0x956755),('calcite',0xDFE0DC),
+        ('dripstone',0x866B5C),('deepslate',0x505055),('tuff',0x6C6D66),('copper',0xC06C50),('iron_block',0xDCDCDC),
+        ('gold_block',0xF8D33D),('diamond_block',0x62EDE4),('emerald_block',0x41F384),('lapis_block',0x1F43A6),
+        ('redstone_block',0xAF1A05),('quartz',0xEAE5DD),('prismarine',0x5AA59A),('sponge',0xC3C14A),('slime',0x7CC86A),
+        ('honey',0xF0A41E),('bookshelf',0xA88654),('chest',0xA4742E),('crafting',0xA88654),('furnace',0x707070),
+        ('stone',0x7F7F7F),('cobble',0x7F7F7F),('andesite',0x8A8A8A),('ore',0x7F7F7F),('brick',0x965F4E),
+    ]
+    for w,c in rules:
+        if w in n: return c
+    return 0x8A8A8A
+
+rows=[];seen=set();names={};player_types={};entity_kinds={};entity_names={};block_tables={}
 for v,p in dp.items():
     if 'protocol' not in p: continue
     n=pv.get(v)
@@ -88,6 +139,7 @@ for v,p in dp.items():
         inv={nm:int(k,16) for k,nm in m.items()}
         v_id=next((inv[x] for x in cands if x in inv),-1)
         if n==340 and c=='P_C_SPAWN_ENTITY': v_id=-1  # 1.12.2: objects only; players use named_entity_spawn
+        if n==340 and c in ('P_C_MAP_CHUNK','P_C_UNLOAD_CHUNK'): v_id=-1  # 1.12.2 chunk format not supported by the map
         ids.append(v_id)
     ents=json.load(open('data/'+p['entities']+'/entities.json'))
     ptype=next((e['id'] for e in ents if e['name']=='player'),-1)
@@ -105,6 +157,17 @@ for v,p in dp.items():
         else: k='o'
         kinds[e['id']]=k; nm[e['id']]=name
     entity_kinds[n]=''.join(kinds); entity_names[n]=','.join(nm)
+    # blocks: per block (in state order) -> delta of minStateId and colour index; packed as chars
+    if n==340:
+        block_tables[n]=''
+    else:
+        blocks=sorted(json.load(open('data/'+p['blocks']+'/blocks.json')), key=lambda b:b['minStateId'])
+        enc=[]; prevmin=0
+        for b in blocks:
+            col=color_for(b['name'])
+            if col not in COLORS: COLORS[col]=len(COLORS)
+            enc.append(chr(b['minStateId']-prevmin+32)); enc.append(chr(COLORS[col]+32)); prevmin=b['minStateId']
+        block_tables[n]=''.join(enc)
     rows.append((n,ids))
 rows.sort()
 out=['// GENERATED by tools/gen_proto.py from minecraft-data. Do not edit.','package app.afkbot;','','final class Proto {']
@@ -120,6 +183,21 @@ out.append('    };')
 out.append('    /** Per version: comma-separated entity names indexed by type id. */')
 out.append('    static final String[] ENTITY_NAMES = {')
 for n,_ in rows: out.append('        "'+entity_names[n]+'",')
+out.append('    };')
+def jstr(t):
+    out=[]
+    for ch in t:
+        o=ord(ch)
+        if ch=='"': out.append('\\"')
+        elif ch=='\\': out.append('\\\\')
+        elif 32<=o<127: out.append(ch)
+        else: out.append('\\u%04x'%o)
+    return '"'+''.join(out)+'"'
+out.append('    /** Map colours (RGB) referenced by BLOCKS. */')
+out.append('    static final int[] COLORS = {'+', '.join('0x%06X'%c for c,_ in sorted(COLORS.items(), key=lambda kv:kv[1]))+'};')
+out.append('    /** Per version: pairs of chars (minStateId delta + 32, colour index + 32) for every block in state order. */')
+out.append('    static final String[] BLOCKS = {')
+for n,_ in rows: out.append('        '+jstr(block_tables[n])+',')
 out.append('    };')
 out.append('    static final int[][] IDS = {')
 for n,ids in rows: out.append('        {'+', '.join(str(x) for x in ids)+'}, // '+str(n))

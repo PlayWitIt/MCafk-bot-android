@@ -61,6 +61,9 @@ final class Bot {
         // Visual Range
         volatile boolean visualRange = true;
         volatile String friends = "";
+        // Map / render distance
+        volatile boolean minimap = true;
+        volatile int viewDistance = 6;
 
         float logoutHealth() {
             return autoLog && logHearts > 0 ? logHearts * 2f : 0;
@@ -277,6 +280,7 @@ final class Bot {
             joinedAt = 0;
         }
         World.reset();
+        MapData.clear();
         nearestPlayer = -1;
         selfEntityId = Integer.MIN_VALUE;
         sneakTicks = 0;
@@ -364,6 +368,7 @@ final class Bot {
             proto = serverProto;
         }
         ids = Proto.IDS[idx];
+        MapData.setVersion(idx, serverProto > 0 ? Math.min(proto, Proto.PROTOCOLS[Proto.PROTOCOLS.length - 1]) : proto);
         playerType = Proto.PLAYER_TYPE[idx];
         kinds = Proto.ENTITY_KINDS[idx];
         typeNames = Proto.ENTITY_NAMES[idx].split(",", -1);
@@ -516,12 +521,35 @@ final class Bot {
     }
 
     private void sendClientSettings() throws IOException {
-        int sid = id(Proto.C_S_SETTINGS);
+        sendSettings(id(Proto.C_S_SETTINGS));
+    }
+
+    private void sendSettings(int sid) throws IOException {
         if (sid < 0) return;
-        Buf b = new Buf(sid).str("en_us").u8(2) // view distance 2: less data for the phone
-                .varInt(0).bool(true).u8(0x7F).varInt(1).bool(false).bool(true);
-        if (proto >= 768) b.varInt(2); // particles: minimal
+        int vd = Math.max(2, Math.min(32, cfg.viewDistance));
+        Buf b = new Buf(sid).str("en_us").u8(vd).varInt(0).bool(true).u8(0x7F).varInt(1);
+        if (!legacy()) {
+            b.bool(false).bool(true);
+            if (proto >= 768) b.varInt(2); // particles: minimal
+        }
         send(b);
+    }
+
+    /** Re-sends client settings (e.g. after the render distance was changed in the app). */
+    void applySettings() {
+        final ScheduledExecutorService t = ticker;
+        if (t == null) return;
+        t.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    if (state == CONFIG) sendSettings(id(Proto.C_S_SETTINGS));
+                    else if (state == PLAY) sendSettings(id(Proto.P_S_SETTINGS));
+                    Hub.log("Render distance set to " + cfg.viewDistance + " chunks");
+                } catch (IOException ignored) {
+                }
+            }
+        });
     }
 
     private void handleConfig(int pid, Buf.In p) throws Exception {
@@ -580,13 +608,27 @@ final class Bot {
             selfEntityId = p.i32();
             World.clearEntities();
             World.inWorld = true;
+            if (!legacy()) {
+                try {
+                    p.bool(); // hardcore
+                    int worlds = p.varInt();
+                    for (int i = 0; i < worlds; i++) p.str();
+                    p.varInt(); // max players
+                    Hub.serverViewDistance = p.varInt();
+                    p.varInt(); // simulation distance
+                    p.bool();
+                    p.bool();
+                    p.bool();
+                    onDimension(p);
+                } catch (IOException ignored) {
+                    MapData.setDimension("");
+                }
+            }
             synchronized (this) {
                 if (joinedAt == 0) joinedAt = System.currentTimeMillis();
             }
             Hub.log("Joined the server!");
-            if (legacy() && id(Proto.P_S_SETTINGS) >= 0) {
-                send(new Buf(id(Proto.P_S_SETTINGS)).str("en_us").u8(2).varInt(0).bool(true).u8(0x7F).varInt(1));
-            }
+            if (legacy()) sendSettings(id(Proto.P_S_SETTINGS));
             Hub.status("Online on " + serverLabel + " as " + playerName, Hub.GREEN);
         } else if (pid == id(Proto.P_C_DISCONNECT)) {
             throw new Kick(readReason(p));
@@ -688,7 +730,28 @@ final class Bot {
         } else if (pid == id(Proto.P_C_RESPAWN)) {
             World.clearEntities(); // changed world
             nearestPlayer = -1;
+            if (!legacy()) {
+                try {
+                    onDimension(p);
+                } catch (IOException ignored) {
+                }
+            }
             return false;
+        } else if (pid == id(Proto.P_C_MAP_CHUNK)) {
+            if (cfg.minimap && MapData.supported) {
+                try {
+                    MapData.readChunk(p, proto, World.selfY);
+                } catch (IOException e) {
+                    MapData.status = "Couldn't read a chunk: " + e.getMessage();
+                }
+            }
+        } else if (pid == id(Proto.P_C_UNLOAD_CHUNK)) {
+            int cz = p.i32();
+            int cx = p.i32();
+            MapData.unload(cx, cz);
+        } else if (pid == id(Proto.P_C_CHUNK_BATCH_FINISHED)) {
+            // Only ask for more chunks when the map is on (saves data otherwise).
+            if (cfg.minimap) send(new Buf(id(Proto.P_S_CHUNK_BATCH_RECEIVED)).f32(20f));
         } else if (pid == id(Proto.P_C_PLAYER_INFO)) {
             readPlayerInfo(p);
         } else if (pid == id(Proto.P_C_PLAYER_REMOVE)) {
@@ -700,6 +763,21 @@ final class Bot {
             return false;
         }
         return true;
+    }
+
+    /** Reads the dimension part of the login/respawn packet. */
+    private void onDimension(Buf.In p) throws IOException {
+        String name;
+        if (proto >= 766) {
+            p.varInt();
+            name = p.str();
+        } else {
+            String type = p.str();
+            name = p.str();
+            if (!name.contains("nether") && type.contains("nether")) name = type;
+        }
+        World.dimension = name;
+        MapData.setDimension(name);
     }
 
     private void onPlayerSeen(World.Ent e) throws SafetyLogout {
@@ -966,6 +1044,7 @@ final class Bot {
         }
         if (sneakTicks > 0 && --sneakTicks == 0) setSneak(false);
         if (detail) updateDetail();
+        if (tick % 200 == 0) MapData.trim(World.selfX, World.selfZ, Math.max(cfg.viewDistance, Hub.serverViewDistance) + 3);
     }
 
     private void setSneak(boolean on) throws IOException {
@@ -1100,7 +1179,8 @@ final class Bot {
                 Proto.P_C_REL_MOVE, Proto.P_C_MOVE_LOOK, Proto.P_C_ENTITY_TELEPORT, Proto.P_C_ENTITY_SYNC, Proto.P_C_RESPAWN,
                 Proto.P_C_PLAYER_INFO, Proto.P_C_PLAYER_REMOVE, Proto.P_C_PLAYER_CHAT};
         for (int k : want) if (ids[k] == pid) return true;
-        return false;
+        if (cfg.minimap && (pid == id(Proto.P_C_MAP_CHUNK) || pid == id(Proto.P_C_UNLOAD_CHUNK))) return true;
+        return pid == id(Proto.P_C_CHUNK_BATCH_FINISHED);
     }
 
     /** Input stream that starts decrypting once a cipher is set. */

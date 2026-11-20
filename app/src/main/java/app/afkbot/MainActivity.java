@@ -44,7 +44,7 @@ public class MainActivity extends Activity implements Hub.Listener {
             TEXT = 0xFFE8EAF0, MUTED = 0xFF8A93A6, ACCENT = 0xFF8B5CF6, ACCENT2 = 0xFF22D3EE,
             GOOD = 0xFF34D399, BAD = 0xFFF87171, WARN = 0xFFFBBF24;
 
-    private static final String[] TABS = {"Home", "Radar", "Modules", "Chat", "Account"};
+    private static final String[] TABS = {"Home", "Map", "Modules", "Chat", "Account"};
     private static final String[] TAB_ICONS = {"◉", "◎", "☰", "✉", "⚇"};
 
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -62,7 +62,7 @@ public class MainActivity extends Activity implements Hub.Listener {
     private RadarView miniRadar;
     // Radar
     private RadarView radar;
-    private TextView radarRange, nearbyList;
+    private TextView radarRange, nearbyList, mapInfo, viewLabel;
     // Chat
     private TextView chatText;
     private ScrollView chatScroll;
@@ -84,6 +84,12 @@ public class MainActivity extends Activity implements Hub.Listener {
             if (tab == 1) {
                 radar.invalidate();
                 refreshNearby();
+                String st = MapData.status;
+                int n = MapData.chunkCount();
+                mapInfo.setText(!cfg.minimap ? "Terrain is off - showing entities only." : !World.inWorld ? "" :
+                        !MapData.supported ? "Terrain isn't available for this server version - showing entities only." :
+                                n + " chunks loaded" + (st.isEmpty() ? "" : "  \u2022  " + st));
+                updateViewLabel();
             } else if (tab == 0) {
                 miniRadar.invalidate();
             }
@@ -197,7 +203,37 @@ public class MainActivity extends Activity implements Hub.Listener {
             nav.addView(item, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         }
         root.addView(nav);
+        final int navPad = dp(8);
+        final LinearLayout navRef = nav;
+        root.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
+            @Override
+            public android.view.WindowInsets onApplyWindowInsets(View v, android.view.WindowInsets in) {
+                int top, bottom, ime, left, right;
+                if (Build.VERSION.SDK_INT >= 30) {
+                    android.graphics.Insets bars = in.getInsets(android.view.WindowInsets.Type.systemBars() | android.view.WindowInsets.Type.displayCutout());
+                    android.graphics.Insets kb = in.getInsets(android.view.WindowInsets.Type.ime());
+                    top = bars.top;
+                    bottom = bars.bottom;
+                    left = bars.left;
+                    right = bars.right;
+                    ime = kb.bottom;
+                } else {
+                    top = in.getSystemWindowInsetTop();
+                    bottom = in.getSystemWindowInsetBottom();
+                    left = in.getSystemWindowInsetLeft();
+                    right = in.getSystemWindowInsetRight();
+                    ime = 0;
+                }
+                boolean keyboard = ime > bottom;
+                // keyboard open: push everything up above it; otherwise extend the tab bar under the system buttons
+                v.setPadding(left, top, right, keyboard ? ime : 0);
+                navRef.setPadding(dp(4), dp(6), dp(4), navPad + (keyboard ? 0 : bottom));
+                navRef.setVisibility(keyboard ? View.GONE : View.VISIBLE);
+                return in;
+            }
+        });
         setContentView(root);
+        root.requestApplyInsets();
     }
 
     private void selectTab(int i) {
@@ -246,7 +282,7 @@ public class MainActivity extends Activity implements Hub.Listener {
 
         LinearLayout rc = card(col);
         LinearLayout rh = row(rc);
-        rh.addView(text("Radar", 15, TEXT, true), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        rh.addView(text("Map", 15, TEXT, true), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         TextView open = text("Open ›", 13, ACCENT, true);
         rh.addView(open);
         miniRadar = new RadarView(this);
@@ -294,7 +330,7 @@ public class MainActivity extends Activity implements Hub.Listener {
         LinearLayout col = page();
         LinearLayout rc = card(col);
         LinearLayout head = row(rc);
-        head.addView(text("Radar", 17, TEXT, true), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        head.addView(text("Map", 17, TEXT, true), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         radarRange = text("", 13, MUTED, false);
         head.addView(radarRange);
         rc.addView(text("North is up. Pinch to zoom, tap to change range.", 12, MUTED, false));
@@ -316,6 +352,51 @@ public class MainActivity extends Activity implements Hub.Listener {
         legendChip(chips, "Animals", RadarView.C_ANIMAL, 2);
         legendChip(chips, "Items", RadarView.C_ITEM, 3);
         legendChip(chips, "Other", RadarView.C_OTHER, 4);
+        mapInfo = text("", 12, MUTED, false);
+        mapInfo.setPadding(0, dp(8), 0, 0);
+        rc.addView(mapInfo);
+
+        // render distance + terrain
+        LinearLayout vc = card(col);
+        vc.addView(text("Render distance", 16, TEXT, true));
+        viewLabel = text("", 13, MUTED, false);
+        vc.addView(viewLabel);
+        final android.widget.SeekBar seek = new android.widget.SeekBar(this);
+        seek.setMax(14); // 2..16 chunks
+        seek.setProgress(Math.max(0, Math.min(14, cfg.viewDistance - 2)));
+        seek.setProgressTintList(ColorStateList.valueOf(ACCENT));
+        seek.setThumbTintList(ColorStateList.valueOf(ACCENT2));
+        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        slp.topMargin = dp(8);
+        vc.addView(seek, slp);
+        seek.setOnSeekBarChangeListener(new android.widget.SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(android.widget.SeekBar sb, int v, boolean user) {
+                cfg.viewDistance = v + 2;
+                updateViewLabel();
+            }
+
+            @Override
+            public void onStartTrackingTouch(android.widget.SeekBar sb) {
+            }
+
+            @Override
+            public void onStopTrackingTouch(android.widget.SeekBar sb) {
+                save();
+                Bot b = Hub.bot;
+                if (b != null) b.applySettings();
+            }
+        });
+        vc.addView(text("How many chunks around you the server sends. Higher shows more of the map but uses more mobile data and battery. The server can lower it.", 12, MUTED, false));
+        LinearLayout tr = chipRow(vc);
+        optionChip(tr, "Show terrain on the map", cfg.minimap, new Toggle() {
+            public void set(boolean v) {
+                cfg.minimap = v;
+                if (!v) MapData.clear();
+                Hub.log(v ? "Map terrain on (fills in as the server sends chunks; reconnect to load everything)" : "Map terrain off");
+            }
+        });
+        updateViewLabel();
 
         LinearLayout nc = card(col);
         nc.addView(text("Nearby", 15, TEXT, true));
@@ -324,6 +405,12 @@ public class MainActivity extends Activity implements Hub.Listener {
         nearbyList.setPadding(0, dp(6), 0, 0);
         nc.addView(nearbyList);
         return scroll(col);
+    }
+
+    private void updateViewLabel() {
+        int sv = Hub.serverViewDistance;
+        int blocks = cfg.viewDistance * 16;
+        viewLabel.setText(cfg.viewDistance + " chunks (about " + blocks + " blocks)" + (sv > 0 ? "  \u2022  server max " + sv : ""));
     }
 
     private void legendChip(LinearLayout parent, String name, final int color, final int which) {

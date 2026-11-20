@@ -11,8 +11,8 @@ Get **AFKBot.apk** from the [latest release](../../releases/tag/latest) and open
 ## Features
 
 - **Home**: live status, health, nearest player, uptime, position, anti-AFK counter, mini radar, recent activity
-- **Radar**: top-down view (north up) of players (with names), hostile mobs, animals and items; pinch to zoom,
-  filters, and a "Nearby" list with distance and direction. Draws only entity dots at 2 fps while visible, so it's light.
+- **Map**: a terrain minimap (top block of every column, height-shaded like a vanilla map) with players (with names), hostile mobs, animals and items on top; pinch to zoom,
+  filters, a "Nearby" list, and a render distance slider. Only keeps one pixel per block column and redraws at 2 fps while visible.
 - **Modules** (inspired by utility clients like Meteor):
   - Anti-AFK: jump / spin / swing / sneak, optional random timing
   - Auto Log: leave on low health or when a non-friend player gets close; optional auto-rejoin
