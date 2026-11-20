@@ -55,6 +55,13 @@ final class Auth {
         }
     }
 
+    /** Mojang returned 429: too many logins in a short time. */
+    static final class RateLimited extends IOException {
+        RateLimited() {
+            super("Mojang is limiting logins right now (too many joins in a short time)");
+        }
+    }
+
     static final class AuthException extends Exception {
         AuthException(String m) {
             super(m);
@@ -418,7 +425,8 @@ final class Auth {
         Resp r = request("POST", "https://sessionserver.mojang.com/session/minecraft/join", body.toString(), "application/json", null);
         if (r.code == 204 || r.code == 200) return;
         if (r.code == 403 || r.code == 401) throw new AuthException("Mojang rejected the login token (HTTP " + r.code + "). It will be refreshed.");
-        throw new IOException("Mojang session server error HTTP " + r.code + " " + r.body);
+        if (r.code == 429) throw new RateLimited();
+        throw new IOException("Mojang session server error HTTP " + r.code + (r.body.trim().startsWith("<") ? "" : " " + shorten(r.body)));
     }
 
     // ---------------- HTTP helpers ----------------

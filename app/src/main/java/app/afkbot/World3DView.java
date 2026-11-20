@@ -61,6 +61,8 @@ public class World3DView extends GLSurfaceView implements GLSurfaceView.Renderer
     private volatile float[] lastMvp;
     private volatile float eyeX, eyeY, eyeZ; // camera position in mesh coordinates
     private int vw = 1, vh = 1;
+    private double smX = Double.NaN, smY, smZ;
+    private long lastFrame = System.nanoTime();
 
     public World3DView(Context c) {
         super(c);
@@ -427,7 +429,22 @@ public class World3DView extends GLSurfaceView implements GLSurfaceView.Renderer
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT | GLES20.GL_DEPTH_BUFFER_BIT);
         if (!World.inWorld) return;
 
-        float px = (float) (World.selfX - originX), py = (float) (World.selfY - originY), pz = (float) (World.selfZ - originZ);
+        // smooth the camera between the 20-per-second position updates (snap on teleports)
+        long nowN = System.nanoTime();
+        double dt = Math.min(0.1, (nowN - lastFrame) / 1e9);
+        lastFrame = nowN;
+        double tx0 = World.selfX, ty0 = World.selfY, tz0 = World.selfZ;
+        if (Double.isNaN(smX) || Math.abs(tx0 - smX) + Math.abs(ty0 - smY) + Math.abs(tz0 - smZ) > 4) {
+            smX = tx0;
+            smY = ty0;
+            smZ = tz0;
+        } else {
+            double k = Math.min(1, dt * 18);
+            smX += (tx0 - smX) * k;
+            smY += (ty0 - smY) * k;
+            smZ += (tz0 - smZ) * k;
+        }
+        float px = (float) (smX - originX), py = (float) (smY - originY), pz = (float) (smZ - originZ);
         float ex, ey, ez, tx, ty, tz;
         if (firstPerson) {
             Matrix.perspectiveM(proj, 0, 75, vw / (float) vh, 0.05f, 400f);

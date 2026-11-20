@@ -357,8 +357,13 @@ final class ProtoDef {
         }
     }
 
-    static VersionData load(java.io.InputStream gz) throws IOException {
-        java.util.zip.GZIPInputStream in = new java.util.zip.GZIPInputStream(gz);
+    /** Loads plain or gzipped JSON. */
+    static VersionData load(java.io.InputStream raw) throws IOException {
+        java.io.InputStream in = new java.io.BufferedInputStream(raw);
+        in.mark(2);
+        int b0 = in.read(), b1 = in.read();
+        in.reset();
+        if (b0 == 0x1f && b1 == 0x8b) in = new java.util.zip.GZIPInputStream(in);
         java.io.ByteArrayOutputStream b = new java.io.ByteArrayOutputStream();
         byte[] buf = new byte[8192];
         int n;

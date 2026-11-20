@@ -134,7 +134,8 @@ final class Bot {
     volatile boolean manual;
     volatile float inForward, inStrafe, lookYaw, lookPitch;
     volatile boolean inJump, inSneak, inSprint;
-    private boolean onGroundM = true, wasSneak, wasSprint, inWater;
+    private boolean onGroundM = true, wasSneak, wasSprint, inWater, hCollideM;
+    private int lastInputFlags = -1;
     private double vxM, vyM, vzM;
     private float lastHealthEvent = -1;
     private volatile int state;
@@ -194,6 +195,7 @@ final class Bot {
 
     private void loop() {
         int failures = 0;
+        int minWait = 0;
         boolean claimLatest = false;
         while (!stopped) {
             long playStart = 0;
@@ -230,8 +232,14 @@ final class Bot {
                 }
                 failures = 0;
                 continue;
+            } catch (Auth.RateLimited rl) {
+                Hub.log(rl.getMessage() + " - waiting 2 minutes before trying again");
+                Hub.status("Mojang login limit - waiting", Hub.YELLOW);
+                minWait = 120;
             } catch (Kick k) {
                 Hub.log("Kicked: " + k.getMessage());
+                String km = String.valueOf(k.getMessage()).toLowerCase(Locale.US);
+                if (km.contains("wait") || km.contains("too fast") || km.contains("throttl")) minWait = 60;
                 Hub.status("Kicked: " + firstLine(k.getMessage()), Hub.RED);
                 Hub.alert("Kicked from " + serverLabel, firstLine(k.getMessage()));
                 emitMod("kicked", "reason", k.getMessage());
@@ -261,7 +269,8 @@ final class Bot {
                 Hub.status("Disconnected (auto-reconnect is off)", Hub.RED);
                 break;
             }
-            int wait = Math.min(300, 10 * (1 << Math.min(5, Math.max(0, failures - 1))));
+            int wait = Math.max(minWait, Math.min(300, 10 * (1 << Math.min(5, Math.max(0, failures - 1)))));
+            minWait = 0;
             for (int i = wait; i > 0 && !stopped; i--) {
                 Hub.status("Reconnecting in " + i + "s", Hub.YELLOW);
                 try {
@@ -302,6 +311,7 @@ final class Bot {
 
     private void cleanup() {
         pendingLogout = null;
+        lastInputFlags = -1;
         Inv.reset();
         manual = false;
         lastHealthEvent = -1;
@@ -1345,7 +1355,7 @@ final class Bot {
             else if (pos) b = new Buf(id(Proto.P_S_POSITION)).f64(x).f64(y).f64(z);
             else b = new Buf(id(Proto.P_S_LOOK)).f32(yaw).f32(pitch);
         }
-        if (proto >= 768) b.u8(onGround ? 1 : 0);
+        if (proto >= 768) b.u8((onGround ? 1 : 0) | (manual && hCollideM ? 2 : 0));
         else b.bool(onGround);
         send(b);
     }
@@ -1417,9 +1427,12 @@ final class Bot {
             sendMove(true, false, ground);
         }
         if (manual) {
+            sendInputs(true);
             if (inSneak != wasSneak) {
                 wasSneak = inSneak;
-                setSneak(inSneak);
+                if (proto < 768) setSneak(inSneak);
+                else if (proto < 771 && id(Proto.P_S_ENTITY_ACTION) >= 0 && selfEntityId != Integer.MIN_VALUE)
+                    send(new Buf(id(Proto.P_S_ENTITY_ACTION)).varInt(selfEntityId).varInt(inSneak ? 0 : 1).varInt(0));
                 sneakTicks = 0;
             }
             if (inSprint != wasSprint && id(Proto.P_S_ENTITY_ACTION) >= 0 && selfEntityId != Integer.MIN_VALUE) {
@@ -1427,12 +1440,17 @@ final class Bot {
                 int act = proto >= 771 ? (inSprint ? 1 : 2) : (inSprint ? 3 : 4);
                 send(new Buf(id(Proto.P_S_ENTITY_ACTION)).varInt(selfEntityId).varInt(act).varInt(0));
             }
-        } else if (wasSneak || wasSprint) {
+        } else if (wasSneak || wasSprint || lastInputFlags > 0) {
             if (wasSneak) setSneak(false);
+            if (wasSprint && id(Proto.P_S_ENTITY_ACTION) >= 0 && selfEntityId != Integer.MIN_VALUE)
+                send(new Buf(id(Proto.P_S_ENTITY_ACTION)).varInt(selfEntityId).varInt(proto >= 771 ? 2 : 4).varInt(0));
+            sendInputs(false);
             wasSneak = false;
             wasSprint = false;
         }
         if (sneakTicks > 0 && --sneakTicks == 0 && !manual) setSneak(false);
+        // 1.21.2+ clients end every tick with this packet; anticheats use it to line up movement
+        if (proto >= 768 && id(Proto.P_S_TICK_END) >= 0) send(new Buf(id(Proto.P_S_TICK_END)));
         if (detail) updateDetail();
         if (tick % 20 == 0) ModEngine.emit("second", null);
         if (tick % 200 == 0) MapData.trim(World.selfX, World.selfZ, Math.max(cfg.viewDistance, Hub.serverViewDistance) + 3);
@@ -1448,16 +1466,22 @@ final class Bot {
     private boolean physicsStep() {
         yaw = lookYaw;
         pitch = Math.max(-90, Math.min(90, lookPitch));
-        float f = inForward, s = inStrafe;
+        // keys are either pressed or not (like WASD); the client then scales input by 0.98
+        float f = inForward > 0.3f ? 1 : inForward < -0.3f ? -1 : 0;
+        float s = inStrafe > 0.3f ? 1 : inStrafe < -0.3f ? -1 : 0;
         if (inSneak) {
             f *= 0.3f;
             s *= 0.3f;
         }
+        f *= 0.98f;
+        s *= 0.98f;
         inWater = (MapData.flagsAt((int) Math.floor(x), (int) Math.floor(y + 0.4), (int) Math.floor(z)) & 2) != 0;
-        boolean sprint = inSprint && f > 0 && !inSneak;
+        boolean sprint = inSprint && f > 0 && !inSneak && !hCollideM;
         double speed = 0.1 * (sprint ? 1.3 : 1.0);
-        double slip = onGroundM ? 0.6 * 0.91 : 0.91;
-        double accel = inWater ? 0.02 : onGroundM ? speed * (0.21600002 / (slip * slip * slip)) : (sprint ? 0.026 : 0.02);
+        // vanilla: acceleration uses the block's slipperiness (0.6); velocity then decays by slipperiness * 0.91
+        double blockSlip = 0.6;
+        double slip = onGroundM ? blockSlip * 0.91 : 0.91;
+        double accel = inWater ? 0.02 : onGroundM ? speed * (0.21600002 / (blockSlip * blockSlip * blockSlip)) : (sprint ? 0.026 : 0.02);
         double len = f * f + s * s;
         if (len >= 1.0E-4) {
             len = Math.sqrt(len);
@@ -1551,8 +1575,27 @@ final class Bot {
                 z = sz;
             }
         }
+        hCollideM = nx != dx || nz != dz;
         if (nx != dx) vxM = 0;
         if (nz != dz) vzM = 0;
+    }
+
+    /** 1.21.2+: tell the server which movement keys are held (anticheats compare this with how you move). */
+    private void sendInputs(boolean active) throws IOException {
+        if (proto < 768 || id(Proto.P_S_PLAYER_INPUT) < 0) return;
+        int flags = 0;
+        if (active) {
+            if (inForward > 0.3f) flags |= 0x01;
+            if (inForward < -0.3f) flags |= 0x02;
+            if (inStrafe > 0.3f) flags |= 0x04;
+            if (inStrafe < -0.3f) flags |= 0x08;
+            if (inJump) flags |= 0x10;
+            if (inSneak) flags |= 0x20;
+            if (inSprint) flags |= 0x40;
+        }
+        if (flags == lastInputFlags) return;
+        lastInputFlags = flags;
+        send(new Buf(id(Proto.P_S_PLAYER_INPUT)).u8(flags));
     }
 
     /** How far we can move along an axis (0 x, 1 y, 2 z) before hitting a solid block (vanilla-style AABB clipping). */

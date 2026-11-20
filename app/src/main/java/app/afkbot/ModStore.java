@@ -27,7 +27,13 @@ final class ModStore {
         Hub.versionLoader = new Hub.VersionLoader() {
             @Override
             public ProtoDef.VersionData load(int protocol) throws Exception {
-                return ProtoDef.load(app.getAssets().open("proto/" + protocol + ".json.gz"));
+                java.io.InputStream in;
+                try {
+                    in = app.getAssets().open("proto/" + protocol + ".json");
+                } catch (java.io.IOException e) {
+                    in = app.getAssets().open("proto/" + protocol + ".json.gz");
+                }
+                return ProtoDef.load(in);
             }
         };
         File[] files = dir(app).listFiles();
