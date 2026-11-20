@@ -261,7 +261,18 @@ final class Bot {
         } catch (Kick k) {
             throw k;
         } catch (Exception e) {
-            throw new IOException("Server not reachable (" + e.getMessage() + ")");
+            boolean usedSrv = !connectHost.equals(host) || connectPort != (port > 0 ? port : 25565);
+            if (!usedSrv) throw new IOException("Server not reachable (" + e.getMessage() + ")");
+            Hub.log("SRV address didn't answer (" + e.getMessage() + "), trying " + host + ":25565 directly");
+            connectHost = host;
+            connectPort = 25565;
+            try {
+                serverProto = ping(host, connectHost, connectPort);
+            } catch (Kick k) {
+                throw k;
+            } catch (Exception e2) {
+                throw new IOException("Server not reachable (" + e2.getMessage() + ")");
+            }
         }
 
         int idx = -1;
@@ -849,31 +860,68 @@ final class Bot {
     }
 
     private static String[] srvLookup(String host) {
-        try {
-            URL u = new URL("https://dns.google/resolve?type=SRV&name=" + URLEncoder.encode("_minecraft._tcp." + host, "UTF-8"));
-            HttpURLConnection h = (HttpURLConnection) u.openConnection();
-            h.setConnectTimeout(5000);
-            h.setReadTimeout(5000);
-            h.setRequestProperty("Accept", "application/dns-json");
-            InputStream in = h.getInputStream();
-            ByteArrayOutputStream b = new ByteArrayOutputStream();
-            byte[] buf = new byte[2048];
-            int n;
-            while ((n = in.read(buf)) > 0) b.write(buf, 0, n);
-            in.close();
-            JSONObject j = new JSONObject(new String(b.toByteArray(), StandardCharsets.UTF_8));
-            JSONArray ans = j.optJSONArray("Answer");
-            if (ans == null) return null;
-            for (int i = 0; i < ans.length(); i++) {
-                JSONObject a = ans.getJSONObject(i);
-                if (a.optInt("type") != 33) continue;
-                String[] parts = a.getString("data").trim().split("\\s+");
-                if (parts.length < 4) continue;
-                String target = parts[3];
-                if (target.endsWith(".")) target = target.substring(0, target.length() - 1);
-                return new String[]{target, parts[2]};
+        return resolveSrv("_minecraft._tcp." + host, 0);
+    }
+
+    /** Follows SRV records, including providers that point an SRV record at another SRV/CNAME name. */
+    private static String[] resolveSrv(String name, int depth) {
+        if (depth > 4) return null;
+        JSONArray ans = dnsQuery(name, "SRV");
+        if (ans == null) return null;
+        String[] pointer = null;
+        String cname = null;
+        for (int i = 0; i < ans.length(); i++) {
+            JSONObject a = ans.optJSONObject(i);
+            if (a == null) continue;
+            int type = a.optInt("type");
+            String data = a.optString("data", "").trim();
+            if (type == 5) {
+                cname = stripDot(data);
+                continue;
             }
-        } catch (Exception ignored) {
+            if (type != 33) continue;
+            String[] parts = data.split("\\s+");
+            if (parts.length < 4) continue;
+            String target = stripDot(parts[3]);
+            if (target.isEmpty()) continue;
+            if (target.startsWith("_")) {
+                if (pointer == null) pointer = new String[]{target, parts[2]};
+                continue;
+            }
+            return new String[]{target, parts[2]};
+        }
+        if (pointer != null) {
+            String[] next = resolveSrv(pointer[0], depth + 1);
+            if (next != null) return next;
+        }
+        if (cname != null && !cname.equals(name)) return resolveSrv(cname, depth + 1);
+        return null;
+    }
+
+    private static String stripDot(String s) {
+        return s.endsWith(".") ? s.substring(0, s.length() - 1) : s;
+    }
+
+    private static JSONArray dnsQuery(String name, String type) {
+        String[] servers = {"https://dns.google/resolve", "https://cloudflare-dns.com/dns-query"};
+        for (String srv : servers) {
+            try {
+                URL u = new URL(srv + "?type=" + type + "&name=" + URLEncoder.encode(name, "UTF-8"));
+                HttpURLConnection h = (HttpURLConnection) u.openConnection();
+                h.setConnectTimeout(5000);
+                h.setReadTimeout(5000);
+                h.setRequestProperty("Accept", "application/dns-json");
+                InputStream in = h.getInputStream();
+                ByteArrayOutputStream b = new ByteArrayOutputStream();
+                byte[] buf = new byte[2048];
+                int n;
+                while ((n = in.read(buf)) > 0) b.write(buf, 0, n);
+                in.close();
+                JSONObject j = new JSONObject(new String(b.toByteArray(), StandardCharsets.UTF_8));
+                JSONArray ans = j.optJSONArray("Answer");
+                return ans == null ? new JSONArray() : ans;
+            } catch (Exception ignored) {
+            }
         }
         return null;
     }
