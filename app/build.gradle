@@ -1,0 +1,44 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "app.afkbot"
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "app.afkbot"
+        minSdk 26
+        targetSdk 35
+        versionCode 4
+        versionName "1.3"
+    }
+
+    signingConfigs {
+        release {
+            // Fixed key kept in the repo so every build can update the previous install.
+            storeFile file("afkbot-release.p12")
+            storePassword "afkbot123"
+            keyAlias "afkbot"
+            keyPassword "afkbot123"
+            storeType "PKCS12"
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+    }
+
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}

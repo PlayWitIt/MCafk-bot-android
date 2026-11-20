@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A simple blocky "Zz" sleep mark on a grass-green tile -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#5D4037" android:pathData="M30,62h48v16h-48z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M34,32h22v6l-14,12h14v6h-22v-6l14,-12h-14z" />
+    <path android:fillColor="#C8E6C9" android:pathData="M60,40h14v4l-9,8h9v4h-14v-4l9,-8h-9z" />
+</vector>
