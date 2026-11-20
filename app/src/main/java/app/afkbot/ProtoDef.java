@@ -325,6 +325,9 @@ final class ProtoDef {
         final double[] hardness; // -1 = unbreakable
         final String[] material; // e.g. "mineable/pickaxe"
         final int[][] harvest; // item ids that can harvest it (empty = anything)
+        /** Exact vanilla collision: per block, shape id per state offset (one entry = same for all states); null = unknown. */
+        final int[][] collision;
+        final float[][][] collisionShapes; // shape id -> boxes {x0,y0,z0,x1,y1,z1}
 
         VersionData(JSONObject root) throws org.json.JSONException {
             def = new ProtoDef(root.getJSONObject("types"));
@@ -352,6 +355,40 @@ final class ProtoDef {
                 JSONArray h = hv != null && i < hv.length() ? hv.getJSONArray(i) : new JSONArray();
                 harvest[i] = new int[h.length()];
                 for (int j = 0; j < h.length(); j++) harvest[i][j] = h.getInt(j);
+            }
+            JSONArray co = root.optJSONArray("collision");
+            JSONObject cs = root.optJSONObject("collisionShapes");
+            if (co != null && cs != null) {
+                int max = 0;
+                java.util.Iterator<String> it = cs.keys();
+                while (it.hasNext()) max = Math.max(max, Integer.parseInt(it.next()));
+                collisionShapes = new float[max + 1][][];
+                it = cs.keys();
+                while (it.hasNext()) {
+                    String key = it.next();
+                    JSONArray boxes = cs.getJSONArray(key);
+                    float[][] f = new float[boxes.length()][6];
+                    for (int b = 0; b < boxes.length(); b++) {
+                        JSONArray bx = boxes.getJSONArray(b);
+                        for (int q = 0; q < 6; q++) f[b][q] = (float) bx.getDouble(q);
+                    }
+                    collisionShapes[Integer.parseInt(key)] = f;
+                }
+                collision = new int[k][];
+                for (int i = 0; i < k && i < co.length(); i++) {
+                    Object v = co.get(i);
+                    if (v instanceof JSONArray) {
+                        JSONArray a = (JSONArray) v;
+                        collision[i] = new int[a.length()];
+                        for (int q = 0; q < a.length(); q++) collision[i][q] = a.getInt(q);
+                    } else {
+                        int id = ((Number) v).intValue();
+                        collision[i] = id < 0 ? null : new int[]{id};
+                    }
+                }
+            } else {
+                collision = null;
+                collisionShapes = null;
             }
             JSONArray sh = root.optJSONArray("shapes"), pr = root.optJSONArray("props");
             shapes = new int[k];

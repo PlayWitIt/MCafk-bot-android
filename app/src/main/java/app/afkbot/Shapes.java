@@ -63,9 +63,23 @@ final class Shapes {
         if (state <= 0) return NONE;
         float[][][] c = collisionCache;
         if (state < c.length && c[state] != null) return c[state];
-        float[][] r = compute(state, true);
+        float[][] r = exact(state);
+        if (r == null) r = compute(state, true);
         if (state < c.length) c[state] = r;
         return r;
+    }
+
+    /** Minecraft's own collision boxes for this state (from minecraft-data), or null if not known. */
+    private static float[][] exact(int state) {
+        ProtoDef.VersionData vd = data;
+        if (vd == null || vd.collision == null) return null;
+        int bi = vd.blockIndex(state);
+        if (bi < 0 || bi >= vd.collision.length || vd.collision[bi] == null) return null;
+        int[] ids = vd.collision[bi];
+        int off = state - vd.blockMin[bi];
+        int id = ids.length == 1 ? ids[0] : off >= 0 && off < ids.length ? ids[off] : -1;
+        if (id < 0 || id >= vd.collisionShapes.length || vd.collisionShapes[id] == null) return null;
+        return vd.collisionShapes[id];
     }
 
     /** Boxes for drawing and tapping (buttons, levers and plates have an outline but no collision). */
