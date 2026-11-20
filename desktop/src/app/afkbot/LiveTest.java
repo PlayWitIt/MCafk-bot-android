@@ -98,6 +98,28 @@ public final class LiveTest {
                         Thread.sleep(800);
                         say(String.format("moved %.2f blocks, corrections %d, now %s", Math.hypot(World.selfX - x0, World.selfZ - z0), Bot.corrections - c0, pos()));
                         break;
+                    case "hold": { // hold <keys> <ms> [yaw]: f b l r = move, j = jump, s = sprint, n = sneak, 0 = nothing
+                        b.manual = true;
+                        if (w.length > 3) b.lookYaw = Float.parseFloat(w[3]);
+                        b.lookPitch = 0;
+                        String k = w[1];
+                        int hc0 = Bot.corrections;
+                        double hx0 = World.selfX, hy0 = World.selfY, hz0 = World.selfZ;
+                        b.inForward = k.contains("f") ? 1 : k.contains("b") ? -1 : 0;
+                        b.inStrafe = k.contains("l") ? 1 : k.contains("r") ? -1 : 0;
+                        b.inJump = k.contains("j");
+                        b.inSprint = k.contains("s");
+                        b.inSneak = k.contains("n");
+                        Thread.sleep(Long.parseLong(w[2]));
+                        b.inForward = 0;
+                        b.inStrafe = 0;
+                        b.inJump = false;
+                        b.inSprint = false;
+                        b.inSneak = false;
+                        Thread.sleep(800);
+                        say(String.format("hold %s: moved %.2f %.2f %.2f, corrections %d, now %s", k, World.selfX - hx0, World.selfY - hy0, World.selfZ - hz0, Bot.corrections - hc0, pos()));
+                        break;
+                    }
                     case "containers":
                         for (Object[] o : Bot.nearbyContainers(5)) {
                             int[] k = (int[]) o[0];

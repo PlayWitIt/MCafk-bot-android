@@ -144,6 +144,49 @@ public class RealTest {
         say("from "+tp+": open="+Inv.openId+" "+Inv.title); b.closeContainer(); Thread.sleep(500);
       }
     }
+    if (script.equals("far")) {
+      // Constantiam bases sit around x/z = -2.7 million, where float maths only has 0.25-block steps.
+      // Rebuild the spot where walking failed (copper chests on slabs, iron doors beside them) out there.
+      int X=-2771683, Z=-2747852, Y=-60;
+      cmd("forceload add "+(X-8)+" "+(Z-8)+" "+(X+8)+" "+(Z+8));
+      cmd("fill "+(X-3)+" "+(Y-1)+" "+(Z-6)+" "+(X+3)+" "+(Y+4)+" "+(Z+3)+" minecraft:air");
+      cmd("fill "+(X-3)+" "+(Y-2)+" "+(Z-6)+" "+(X+3)+" "+(Y-2)+" "+(Z+3)+" minecraft:stone");
+      cmd("fill "+X+" "+(Y-1)+" "+(Z-5)+" "+X+" "+(Y-1)+" "+(Z+2)+" minecraft:cobblestone_slab[type=top]");
+      cmd("fill "+X+" "+Y+" "+(Z-5)+" "+X+" "+Y+" "+(Z+2)+" minecraft:copper_chest[facing=west]");
+      cmd("fill "+(X+1)+" "+Y+" "+(Z-5)+" "+(X+1)+" "+Y+" "+(Z+2)+" minecraft:cobblestone");
+      for (int dz=-5; dz<=2; dz++) {
+        cmd("setblock "+(X+1)+" "+(Y+1)+" "+(Z+dz)+" minecraft:iron_door[facing=east,half=lower]");
+        cmd("setblock "+(X+1)+" "+(Y+2)+" "+(Z+dz)+" minecraft:iron_door[facing=east,half=upper]");
+      }
+      Thread.sleep(1500);
+      cmd("tp Tester "+(X+0.5)+" "+(Y+0.875)+" "+(Z+1.5)+" -90 0"); Thread.sleep(3000);
+      say(String.format("at %.4f %.4f %.4f", World.selfX, World.selfY, World.selfZ));
+      // the door's box is x 0..3/16 of block X+1. From the west we stop at its x=0 face (exact in float);
+      // from the east at its x=3/16 face, which float maths rounds to a 0.25 step out here.
+      int c1=Bot.corrections;
+      walk(b, -90, 1500, false);
+      say(String.format("door from the west: x=%.4f want %.4f corrections=%d", World.selfX, X + 1 - 0.3, Bot.corrections-c1));
+      cmd("fill "+(X+2)+" "+(Y-1)+" "+(Z-1)+" "+(X+3)+" "+(Y-1)+" "+(Z+2)+" minecraft:stone");
+      cmd("fill "+(X+1)+" "+(Y-1)+" "+(Z-1)+" "+(X+1)+" "+(Y-1)+" "+(Z+2)+" minecraft:stone");
+      cmd("fill "+(X+1)+" "+Y+" "+(Z-1)+" "+(X+1)+" "+Y+" "+(Z+2)+" minecraft:air");
+      for (int dz=-1; dz<=2; dz++) {
+        cmd("setblock "+(X+1)+" "+Y+" "+(Z+dz)+" minecraft:iron_door[facing=east,half=lower]");
+        cmd("setblock "+(X+1)+" "+(Y+1)+" "+(Z+dz)+" minecraft:iron_door[facing=east,half=upper]");
+      }
+      Thread.sleep(1000);
+      cmd("tp Tester "+(X+2.8)+" "+Y+" "+(Z+1.5)+" 90 0"); Thread.sleep(2500);
+      c1=Bot.corrections;
+      walk(b, 90, 1500, false);
+      double want = X + 1 + 0.1875 + 0.3;
+      say(String.format("door from the east: x=%.4f want %.4f (off by %.4f) corrections=%d", World.selfX, want, World.selfX-want, Bot.corrections-c1));
+      cmd("tp Tester "+(X+0.5)+" "+(Y+0.875)+" "+(Z-2.5)+" 180 0"); Thread.sleep(2500);
+      c1=Bot.corrections; double z0=World.selfZ;
+      walk(b, 180, 2500, false); // north along the doors, on top of the chests
+      say(String.format("walked north along doors: dz=%.2f x=%.4f y=%.4f corrections=%d", World.selfZ-z0, World.selfX, World.selfY, Bot.corrections-c1));
+      c1=Bot.corrections;
+      say(b.testWalk()); Thread.sleep(3800);
+      say("test walk corrections="+(Bot.corrections-c1));
+    }
     say("total corrections="+Bot.corrections);
     b.stop(); Thread.sleep(300); System.exit(0);
   }

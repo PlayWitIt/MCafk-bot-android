@@ -1647,16 +1647,16 @@ final class Bot {
 
     private void onTeleport(Buf.In p) throws IOException {
         int tid, flags;
-        double nx, ny, nz;
+        double nx, ny, nz, tvx = 0, tvy = 0, tvz = 0;
         float nyaw, npitch;
         if (proto >= 768) {
             tid = p.varInt();
             nx = p.f64();
             ny = p.f64();
             nz = p.f64();
-            p.f64();
-            p.f64();
-            p.f64();
+            tvx = p.f64();
+            tvy = p.f64();
+            tvz = p.f64();
             nyaw = p.f32();
             npitch = p.f32();
             flags = p.i32();
@@ -1675,6 +1675,7 @@ final class Bot {
             ox0 = x;
             oy0 = y;
             oz0 = z;
+            float oldYaw = yaw, oldPitch = pitch;
             x = (flags & 0x01) != 0 ? x + nx : nx;
             y = (flags & 0x02) != 0 ? y + ny : ny;
             z = (flags & 0x04) != 0 ? z + nz : nz;
@@ -1682,7 +1683,29 @@ final class Bot {
             pitch = (flags & 0x10) != 0 ? pitch + npitch : npitch;
             groundY = y;
             jumping = false;
-            vxM = vyM = vzM = 0;
+            if (proto >= 768) {
+                // 1.21.2+: the packet carries a velocity too, and flags 0x20/0x40/0x80 mean "add to yours" per axis.
+                // Anticheat setbacks often keep your velocity; zeroing it makes the next move wrong again.
+                double cx = vxM, cy = vyM, cz = vzM;
+                if ((flags & 0x100) != 0) { // rotate the current velocity by the rotation change (vanilla order: pitch, then yaw)
+                    double a = Math.toRadians(oldPitch - pitch), c = Math.cos(a), sn = Math.sin(a);
+                    double ny2 = cy * c + cz * sn, nz2 = cz * c - cy * sn;
+                    cy = ny2;
+                    cz = nz2;
+                    a = Math.toRadians(oldYaw - yaw);
+                    c = Math.cos(a);
+                    sn = Math.sin(a);
+                    double nx2 = cx * c + cz * sn;
+                    nz2 = cz * c - cx * sn;
+                    cx = nx2;
+                    cz = nz2;
+                }
+                vxM = (flags & 0x20) != 0 ? cx + tvx : tvx;
+                vyM = (flags & 0x40) != 0 ? cy + tvy : tvy;
+                vzM = (flags & 0x80) != 0 ? cz + tvz : tvz;
+            } else {
+                vxM = vyM = vzM = 0;
+            }
             lookYaw = yaw;
             lookPitch = pitch;
             first = !havePos;
@@ -1700,9 +1723,11 @@ final class Bot {
             if (now - lastCorrectionLog > 3000) {
                 lastCorrectionLog = now;
                 Hub.log(String.format(Locale.US, "Server corrected your position by %.2f blocks (from %.2f, %.2f, %.2f to %.2f, %.2f, %.2f) %s%s",
-                        moved, ox0, oy0, oz0, x, y, z, blocksAround(), manual ? " - movement was rejected" : ""));
+                        moved, ox0, oy0, oz0, x, y, z, blocksAround(), manual ? " - movement was rejected" : "")
+                        + String.format(Locale.US, " [flags 0x%x, velocity %.3f %.3f %.3f]", flags, tvx, tvy, tvz));
             }
         }
+        if (traceSent) System.out.println(String.format(Locale.US, "[TP] id=%d flags=0x%x to %.3f %.3f %.3f yaw %.1f pitch %.1f", tid, flags, x, y, z, yaw, pitch));
         send(new Buf(id(Proto.P_S_TELEPORT_CONFIRM)).varInt(tid));
         sendMove(true, true, false);
         checkPlayers();
@@ -1726,6 +1751,8 @@ final class Bot {
         }
         if (proto >= 768) b.u8((onGround ? 1 : 0) | (manual && hCollideM ? 2 : 0));
         else b.bool(onGround);
+        if (traceSent) System.out.println(String.format(Locale.US, "[MOVE] t%d %.5f %.5f %.5f yaw %.2f ground=%b hcoll=%b v=%.4f %.4f %.4f in=%d",
+                tick, x, y, z, yaw, onGround, hCollideM, vxM, vyM, vzM, lastInputFlags));
         send(b);
     }
 
@@ -1774,6 +1801,9 @@ final class Bot {
                     y = groundY;
                     jumping = false;
                     ground = true;
+                    onGroundM = true;
+                    vxM = vzM = 0;
+                    vyM = (0 - 0.08) * 0.98; // landed: velocity zeroed, then this tick's gravity, as in vanilla
                 } else {
                     ground = false;
                 }
@@ -1792,8 +1822,13 @@ final class Bot {
                 }
                 jumps++;
                 nextJumpAt = now + nextAfkDelaySeconds() * 1000L;
-            } else if (tick % 20 == 0) {
-                doMove = true;
+            } else {
+                // standing still: keep simulating like a real client, so onGround and the downward velocity are
+                // already right when you start walking (and you fall if the block under you goes away)
+                double px = x, py = y, pz = z;
+                ground = physicsStep(false);
+                groundY = y;
+                if (Math.abs(x - px) + Math.abs(y - py) + Math.abs(z - pz) > 1e-6 || tick % 20 == 0) doMove = true;
             }
             detail = tick % 10 == 0;
             World.selfX = x;
@@ -1801,15 +1836,8 @@ final class Bot {
             World.selfZ = z;
             World.selfYaw = yaw;
         }
-        if (doAction) {
-            if (cfg.afkSwing) send(new Buf(id(Proto.P_S_SWING)).varInt(0));
-            if (cfg.afkSneak) setSneak(true);
-            sendMove(true, true, true);
-        } else if (doMove && manual) {
-            sendMove(true, true, ground);
-        } else if (doMove) {
-            sendMove(true, false, ground);
-        }
+        // Vanilla order each tick: held keys (player_input), then sprint/sneak state, then the move itself.
+        // Anticheats check each move against the keys they already know about, so the move must come last.
         if (manual) {
             sendInputs(true);
             if (inSneak != wasSneak) {
@@ -1832,6 +1860,15 @@ final class Bot {
             wasSneak = false;
             wasSprint = false;
         }
+        if (doAction) {
+            if (cfg.afkSwing) send(new Buf(id(Proto.P_S_SWING)).varInt(0));
+            if (cfg.afkSneak) setSneak(true);
+            sendMove(true, true, true);
+        } else if (doMove && manual) {
+            sendMove(true, true, ground);
+        } else if (doMove) {
+            sendMove(true, false, ground);
+        }
         if (sneakTicks > 0 && --sneakTicks == 0 && !manual) setSneak(false);
         // 1.21.2+ clients end every tick with this packet; anticheats use it to line up movement
         if (proto >= 768 && id(Proto.P_S_TICK_END) >= 0) send(new Buf(id(Proto.P_S_TICK_END)));
@@ -1844,15 +1881,28 @@ final class Bot {
     // Movement physics (close to vanilla) for driving the player from the 3D tab
     // ===================================================================================
 
-    private static final double W = 0.3, H = 1.8, STEP = 0.6;
+    // Vanilla's player box is built from floats: half width 0.6F / 2 = 0.30000001192..., height 1.8F = 1.79999995...
+    // Using 0.3 exactly leaves you 0.000000012 inside a wall you touch, which strict servers reject as moving into a block.
+    private static final double W = 0.6f / 2.0f, H = 1.8f, STEP = 0.6f;
 
     /** One 50 ms tick of walking physics. Must hold the lock. Returns onGround. */
     private boolean physicsStep() {
-        yaw = lookYaw;
-        pitch = Math.max(-90, Math.min(90, lookPitch));
+        return physicsStep(true);
+    }
+
+    /** drive=false: a tick with no keys held (a real client keeps simulating while you stand still). */
+    private boolean physicsStep(boolean drive) {
+        // like vanilla, don't simulate until the chunk you're in has arrived (unloaded blocks count as solid,
+        // and you'd be standing inside one)
+        if (!MapData.loaded((int) Math.floor(x), (int) Math.floor(z))) return onGroundM;
+        if (drive) {
+            yaw = lookYaw;
+            pitch = Math.max(-90, Math.min(90, lookPitch));
+        }
+        boolean inSneak = drive && this.inSneak, inSprint = drive && this.inSprint, inJump = drive && this.inJump;
         // keys are either pressed or not (like WASD); the client then scales input by 0.98
-        float f = inForward > 0.3f ? 1 : inForward < -0.3f ? -1 : 0;
-        float s = inStrafe > 0.3f ? 1 : inStrafe < -0.3f ? -1 : 0;
+        float f = !drive ? 0 : inForward > 0.3f ? 1 : inForward < -0.3f ? -1 : 0;
+        float s = !drive ? 0 : inStrafe > 0.3f ? 1 : inStrafe < -0.3f ? -1 : 0;
         if (inSneak) {
             f *= 0.3f;
             s *= 0.3f;
@@ -2066,52 +2116,81 @@ final class Bot {
             for (int by = (int) Math.floor(y0) - 1; by <= (int) Math.floor(y1 - 1e-7); by++) // -1: fences/walls are 1.5 tall
                 for (int bz = (int) Math.floor(z0); bz <= (int) Math.floor(z1 - 1e-7); bz++)
                     for (float[] b : boxesAt(bx, by, bz))
-                        if (x1 > bx + b[0] + 1e-7 && x0 < bx + b[3] - 1e-7 && y1 > by + b[1] + 1e-7 && y0 < by + b[4] - 1e-7
-                                && z1 > bz + b[2] + 1e-7 && z0 < bz + b[5] - 1e-7) return true;
+                        // (double) bx: int + float is float maths, which is only 0.25-block precise past x/z = 2 million
+                        if (x1 > (double) bx + b[0] + 1e-7 && x0 < (double) bx + b[3] - 1e-7 && y1 > (double) by + b[1] + 1e-7 && y0 < (double) by + b[4] - 1e-7
+                                && z1 > (double) bz + b[2] + 1e-7 && z0 < (double) bz + b[5] - 1e-7) return true;
         return false;
     }
 
-    /** Moves with collision: Y first, then X and Z, with step-up onto blocks up to 0.6 high. */
+    /**
+     * Moves with collision exactly like vanilla Entity.move/collide: Y first, then the larger of X/Z last; if a wall
+     * stops us and we were on the ground before this move (or landed during it), try each step height up to 0.6
+     * that a nearby block's top offers, lowest first, and keep the first one that gets us further sideways.
+     */
     private void move(double dx, double dy, double dz) {
-        double ox = x, oy = y, oz = z;
-        double ny = sweep(1, dy);
-        boolean hitY = ny != dy;
-        y += ny;
-        onGroundM = hitY && dy < 0;
-        if (hitY) vyM = 0;
-        double nx = sweep(0, dx);
-        x += nx;
-        double nz = sweep(2, dz);
-        z += nz;
-        boolean hitH = nx != dx || nz != dz;
-        if (hitH && (onGroundM || dy < 0 && oy - y < 0.01) && !inWater) {
-            // try stepping up
-            double sx = x, sy = y, sz = z;
-            x = ox;
-            z = oz;
-            y = oy;
-            double up = sweep(1, STEP);
-            y += up;
-            double sx2 = sweep(0, dx);
-            x += sx2;
-            double sz2 = sweep(2, dz);
-            z += sz2;
-            double down = sweep(1, -up - 0.01);
-            y += down;
-            double gained = Math.abs(x - ox) + Math.abs(z - oz);
-            if (gained > Math.abs(sx - ox) + Math.abs(sz - oz) + 1e-4) {
-                onGroundM = true;
-                nx = sx2;
-                nz = sz2;
-            } else {
-                x = sx;
-                y = sy;
-                z = sz;
+        boolean wasGround = onGroundM;
+        double[] r = collideFrom(x, y, z, dx, dy, dz);
+        boolean vColl = r[1] != dy;
+        if ((r[0] != dx || r[2] != dz) && (wasGround || vColl && dy < 0) && !inWater) {
+            double baseY = vColl ? y + r[1] : y; // start from where we landed if we hit the ground this tick
+            double have = r[0] * r[0] + r[2] * r[2];
+            for (float h : stepHeights(x, baseY, z, dx, dz, vColl, (float) r[1])) {
+                double[] t = collideFrom(x, baseY, z, dx, h, dz);
+                if (t[0] * t[0] + t[2] * t[2] > have) {
+                    r = new double[]{t[0], t[1] + (baseY - y), t[2]};
+                    break;
+                }
             }
         }
-        hCollideM = nx != dx || nz != dz;
-        if (nx != dx) vxM = 0;
-        if (nz != dz) vzM = 0;
+        x += r[0];
+        y += r[1];
+        z += r[2];
+        boolean hx = Math.abs(r[0] - dx) >= 1.0E-5, hz = Math.abs(r[2] - dz) >= 1.0E-5; // Mth.equal
+        vColl = r[1] != dy;
+        onGroundM = vColl && dy < 0;
+        hCollideM = hx || hz;
+        if (hx) vxM = 0;
+        if (hz) vzM = 0;
+        if (vColl) vyM = 0;
+    }
+
+    /** Movement allowed from a box at (ox, oy, oz): Y, then X and Z (vanilla moves the bigger of X/Z last). */
+    private double[] collideFrom(double ox, double oy, double oz, double dx, double dy, double dz) {
+        double ry = sweepFrom(ox, oy, oz, 1, dy);
+        oy += ry;
+        double rx, rz;
+        if (Math.abs(dx) < Math.abs(dz)) {
+            rz = sweepFrom(ox, oy, oz, 2, dz);
+            rx = sweepFrom(ox, oy, oz + rz, 0, dx);
+        } else {
+            rx = sweepFrom(ox, oy, oz, 0, dx);
+            rz = sweepFrom(ox + rx, oy, oz, 2, dz);
+        }
+        return new double[]{rx, ry, rz};
+    }
+
+    /** Candidate step-up heights (vanilla collectCandidateStepUpHeights): tops/bottoms of nearby boxes, 0..0.6, sorted. */
+    private float[] stepHeights(double ox, double oy, double oz, double dx, double dz, boolean vColl, float skip) {
+        double x0 = Math.min(ox - W, ox - W + dx), x1 = Math.max(ox + W, ox + W + dx);
+        double z0 = Math.min(oz - W, oz - W + dz), z1 = Math.max(oz + W, oz + W + dz);
+        double y0 = vColl ? oy : oy - 1.0E-5F, y1 = oy + H + STEP;
+        java.util.TreeSet<Float> out = new java.util.TreeSet<Float>();
+        for (int bx = (int) Math.floor(x0); bx <= (int) Math.floor(x1 - 1e-7); bx++)
+            for (int by = (int) Math.floor(y0) - 1; by <= (int) Math.floor(y1 - 1e-7); by++)
+                for (int bz = (int) Math.floor(z0); bz <= (int) Math.floor(z1 - 1e-7); bz++)
+                    for (float[] q : boxesAt(bx, by, bz)) {
+                        double bx0 = (double) bx + q[0], bx1 = (double) bx + q[3], by0 = (double) by + q[1], by1 = (double) by + q[4];
+                        double bz0 = (double) bz + q[2], bz1 = (double) bz + q[5];
+                        if (bx1 <= x0 || bx0 >= x1 || by1 <= y0 || by0 >= y1 || bz1 <= z0 || bz0 >= z1) continue;
+                        for (double c : new double[]{by0, by1}) {
+                            float f = (float) (c - oy);
+                            if (f >= 0 && f <= (float) STEP && f != skip) out.add(f); // float compare, like vanilla
+                        }
+                    }
+        float[] r = new float[out.size()];
+        int i = 0;
+        for (Float f : out) r[i++] = f;
+        return r;
     }
 
     /** 1.21.2+: tell the server which movement keys are held (anticheats compare this with how you move). */
@@ -2134,8 +2213,12 @@ final class Bot {
 
     /** How far we can move along an axis (0 x, 1 y, 2 z) before hitting a block's real shape (vanilla-style AABB clipping). */
     private double sweep(int axis, double d) {
+        return sweepFrom(x, y, z, axis, d);
+    }
+
+    private double sweepFrom(double px, double py, double pz, int axis, double d) {
         if (d == 0) return 0;
-        double[] lo = {x - W, y, z - W}, hi = {x + W, y + H, z + W};
+        double[] lo = {px - W, py, pz - W}, hi = {px + W, py + H, pz + W};
         double[] slo = lo.clone(), shi = hi.clone();
         if (d > 0) shi[axis] += d;
         else slo[axis] += d;
@@ -2147,7 +2230,8 @@ final class Bot {
             for (int by = y0; by <= y1; by++)
                 for (int bz = z0; bz <= z1; bz++) {
                     for (float[] bb : boxesAt(bx, by, bz)) {
-                        double[] b0 = {bx + bb[0], by + bb[1], bz + bb[2]}, b1 = {bx + bb[3], by + bb[4], bz + bb[5]};
+                        // double first: int + float would be float maths (0.25-block steps at 2M+ coordinates)
+                        double[] b0 = {(double) bx + bb[0], (double) by + bb[1], (double) bz + bb[2]}, b1 = {(double) bx + bb[3], (double) by + bb[4], (double) bz + bb[5]};
                         boolean overlap = true;
                         for (int a = 0; a < 3; a++) {
                             if (a == axis) continue;
