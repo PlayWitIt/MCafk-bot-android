@@ -110,6 +110,7 @@ public class MainActivity extends Activity implements Hub.Listener {
         getWindow().setNavigationBarColor(SURFACE);
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         cfg = app.afkbot.Settings.get(this);
+        ModStore.init(this);
         buildUi();
         if (b != null) tab = b.getInt("tab", 0);
         selectTab(tab);
@@ -673,6 +674,10 @@ public class MainActivity extends Activity implements Hub.Listener {
         LinearLayout col = page();
         col.addView(text("Modules", 22, TEXT, true));
         col.addView(text("Changes apply right away, even while connected.", 13, MUTED, false));
+        buildModsSection(col);
+        TextView bi = text("Built-in modules", 16, TEXT, true);
+        bi.setPadding(dp(2), dp(18), 0, 0);
+        col.addView(bi);
 
         LinearLayout afk = module(col, "Anti-AFK", "Does something every few seconds so the server doesn't kick you for idling.", cfg.antiAfk, new Toggle() {
             public void set(boolean v) {
@@ -774,6 +779,356 @@ public class MainActivity extends Activity implements Hub.Listener {
         fr.addView(f);
         return scroll(col);
     }
+
+    // ---------------------------------------------------------------- Mods
+
+    private static final int PICK_MOD = 42;
+    private LinearLayout modsList;
+    private int shownModsVersion = -1;
+
+    private void buildModsSection(LinearLayout col) {
+        LinearLayout c = card(col);
+        LinearLayout head = row(c);
+        head.addView(text("Mods", 18, TEXT, true), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        TextView help = text("How to write one", 13, ACCENT, true);
+        head.addView(help);
+        help.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                showText("Writing a mod", MOD_HELP);
+            }
+        });
+        c.addView(text("Small JavaScript add-ons that react to chat, players, health and more. They run sandboxed: no files, no internet, and a broken mod is switched off automatically.", 12, MUTED, false));
+        LinearLayout r1 = chipRow(c);
+        actionChip(r1, "Examples", new Runnable() {
+            public void run() {
+                showExamples();
+            }
+        });
+        actionChip(r1, "From file", new Runnable() {
+            public void run() {
+                Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                i.addCategory(Intent.CATEGORY_OPENABLE);
+                i.setType("*/*");
+                try {
+                    startActivityForResult(i, PICK_MOD);
+                } catch (Exception e) {
+                    toast("No file picker available");
+                }
+            }
+        });
+        actionChip(r1, "Paste code", new Runnable() {
+            public void run() {
+                editCode("Paste a mod", "", "Install", new CodeSaver() {
+                    public void save(String code) {
+                        installMod(code);
+                    }
+                });
+            }
+        });
+        actionChip(r1, "From link", new Runnable() {
+            public void run() {
+                askLink();
+            }
+        });
+        modsList = new LinearLayout(this);
+        modsList.setOrientation(LinearLayout.VERTICAL);
+        col.addView(modsList);
+        refreshMods();
+    }
+
+    private void actionChip(LinearLayout parent, String name, final Runnable r) {
+        TextView t = text(name, 13, TEXT, true);
+        t.setPadding(dp(14), dp(8), dp(14), dp(8));
+        t.setBackground(round(SURFACE2, dp(20), ACCENT));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.setMargins(0, 0, dp(8), 0);
+        parent.addView(t, lp);
+        t.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                r.run();
+            }
+        });
+    }
+
+    private void refreshMods() {
+        if (modsList == null) return;
+        shownModsVersion = ModEngine.version;
+        modsList.removeAllViews();
+        List<ModEngine.Mod> mods = ModEngine.all();
+        if (mods.isEmpty()) {
+            TextView t = text("No mods yet. Tap Examples to try some.", 13, MUTED, false);
+            t.setPadding(dp(4), dp(10), 0, 0);
+            modsList.addView(t);
+            return;
+        }
+        for (final ModEngine.Mod m : mods) {
+            LinearLayout c = card(modsList);
+            LinearLayout head = row(c);
+            LinearLayout titles = new LinearLayout(this);
+            titles.setOrientation(LinearLayout.VERTICAL);
+            titles.addView(text(m.name + (m.version.isEmpty() ? "" : "  v" + m.version), 15, TEXT, true));
+            if (!m.description.isEmpty()) titles.addView(text(m.description, 12, MUTED, false));
+            boolean on = ModStore.isEnabled(this, m.id);
+            String state = !on ? "Off" : m.running ? "Running" : m.lastError != null ? "Stopped: " + m.lastError : "Starting...";
+            TextView st = text(state, 12, !on ? MUTED : m.running ? GOOD : BAD, false);
+            titles.addView(st);
+            head.addView(titles, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+            Switch sw = new Switch(this);
+            sw.setChecked(on);
+            int[][] states = {{android.R.attr.state_checked}, {}};
+            sw.setThumbTintList(new ColorStateList(states, new int[]{Color.WHITE, 0xFFB4BCD0}));
+            sw.setTrackTintList(new ColorStateList(states, new int[]{ACCENT, STROKE}));
+            head.addView(sw);
+            sw.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
+                public void onCheckedChanged(android.widget.CompoundButton b, boolean v) {
+                    ModStore.setEnabled(MainActivity.this, m.id, v);
+                    ui.postDelayed(new Runnable() {
+                        public void run() {
+                            refreshMods();
+                        }
+                    }, 400);
+                }
+            });
+            LinearLayout acts = chipRow(c);
+            actionChip(acts, "Edit", new Runnable() {
+                public void run() {
+                    editCode("Edit " + m.name, m.code, "Save", new CodeSaver() {
+                        public void save(String code) {
+                            try {
+                                ModStore.saveCode(MainActivity.this, m.id, code);
+                                toast("Saved");
+                            } catch (Exception e) {
+                                toast("Couldn't save: " + e.getMessage());
+                            }
+                            refreshModsSoon();
+                        }
+                    });
+                }
+            });
+            actionChip(acts, "Log", new Runnable() {
+                public void run() {
+                    String l = m.logText();
+                    showText(m.name + " log", l.isEmpty() ? "Nothing logged yet." : l);
+                }
+            });
+            actionChip(acts, "Reset data", new Runnable() {
+                public void run() {
+                    ModStore.clearData(MainActivity.this, m.id);
+                    toast("Saved data cleared");
+                }
+            });
+            actionChip(acts, "Delete", new Runnable() {
+                public void run() {
+                    new android.app.AlertDialog.Builder(MainActivity.this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                            .setTitle("Delete " + m.name + "?")
+                            .setPositiveButton("Delete", new android.content.DialogInterface.OnClickListener() {
+                                public void onClick(android.content.DialogInterface d, int w) {
+                                    ModStore.delete(MainActivity.this, m.id);
+                                    refreshMods();
+                                }
+                            })
+                            .setNegativeButton("Cancel", null)
+                            .show();
+                }
+            });
+        }
+    }
+
+    private void refreshModsSoon() {
+        ui.postDelayed(new Runnable() {
+            public void run() {
+                refreshMods();
+            }
+        }, 500);
+    }
+
+    private void installMod(String code) {
+        try {
+            String id = ModStore.install(this, code);
+            ModEngine.Mod m = ModEngine.get(id);
+            toast("Installed " + (m != null ? m.name : id));
+        } catch (Exception e) {
+            toast("Couldn't install: " + e.getMessage());
+        }
+        refreshModsSoon();
+    }
+
+    private void showExamples() {
+        try {
+            final String[] files = getAssets().list("mods");
+            if (files == null || files.length == 0) {
+                toast("No examples found");
+                return;
+            }
+            final String[] codes = new String[files.length];
+            String[] labels = new String[files.length];
+            for (int i = 0; i < files.length; i++) {
+                java.io.InputStream in = getAssets().open("mods/" + files[i]);
+                codes[i] = ModStore.readAll(in);
+                in.close();
+                labels[i] = ModEngine.meta(codes[i], "name", files[i]) + "\n" + ModEngine.meta(codes[i], "description", "");
+            }
+            new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                    .setTitle("Example mods (tap to install)")
+                    .setItems(labels, new android.content.DialogInterface.OnClickListener() {
+                        public void onClick(android.content.DialogInterface d, int which) {
+                            installMod(codes[which]);
+                        }
+                    })
+                    .setNegativeButton("Close", null)
+                    .show();
+        } catch (Exception e) {
+            toast("Couldn't open examples: " + e.getMessage());
+        }
+    }
+
+    private void askLink() {
+        final EditText e = edit("https://raw.githubusercontent.com/.../mod.js", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        FrameLayout wrap = new FrameLayout(this);
+        wrap.setPadding(dp(20), dp(8), dp(20), 0);
+        wrap.addView(e);
+        new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle("Install a mod from a link")
+                .setMessage("Only install mods from people you trust. A GitHub file link works too.")
+                .setView(wrap)
+                .setPositiveButton("Download", new android.content.DialogInterface.OnClickListener() {
+                    public void onClick(android.content.DialogInterface d, int w) {
+                        final String url = e.getText().toString().trim();
+                        if (!url.startsWith("http")) {
+                            toast("Enter a link starting with https://");
+                            return;
+                        }
+                        new Thread(new Runnable() {
+                            public void run() {
+                                try {
+                                    final String code = ModStore.download(url);
+                                    ui.post(new Runnable() {
+                                        public void run() {
+                                            editCode("Review before installing", code, "Install", new CodeSaver() {
+                                                public void save(String c) {
+                                                    installMod(c);
+                                                }
+                                            });
+                                        }
+                                    });
+                                } catch (final Exception ex) {
+                                    ui.post(new Runnable() {
+                                        public void run() {
+                                            toast("Download failed: " + ex.getMessage());
+                                        }
+                                    });
+                                }
+                            }
+                        }).start();
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    @Override
+    protected void onActivityResult(int req, int res, Intent data) {
+        super.onActivityResult(req, res, data);
+        if (req != PICK_MOD || res != RESULT_OK || data == null || data.getData() == null) return;
+        try {
+            java.io.InputStream in = getContentResolver().openInputStream(data.getData());
+            String code = ModStore.readAll(in);
+            in.close();
+            editCode("Review before installing", code, "Install", new CodeSaver() {
+                public void save(String c) {
+                    installMod(c);
+                }
+            });
+        } catch (Exception e) {
+            toast("Couldn't read the file: " + e.getMessage());
+        }
+    }
+
+    interface CodeSaver {
+        void save(String code);
+    }
+
+    private void editCode(String title, String code, String okLabel, final CodeSaver saver) {
+        final EditText e = new EditText(this);
+        e.setText(code);
+        e.setTypeface(Typeface.MONOSPACE);
+        e.setTextSize(12);
+        e.setTextColor(TEXT);
+        e.setHint("// @name My Mod\nmod.on('chat', function (e) {\n  bot.log(e.raw);\n});");
+        e.setHintTextColor(0xFF5B6478);
+        e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        e.setSingleLine(false);
+        e.setHorizontallyScrolling(true);
+        e.setGravity(Gravity.TOP | Gravity.START);
+        e.setMinLines(14);
+        e.setBackground(round(SURFACE2, dp(10), STROKE));
+        e.setPadding(dp(10), dp(10), dp(10), dp(10));
+        FrameLayout wrap = new FrameLayout(this);
+        wrap.setPadding(dp(14), dp(8), dp(14), 0);
+        wrap.addView(e, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(380)));
+        new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle(title)
+                .setView(wrap)
+                .setPositiveButton(okLabel, new android.content.DialogInterface.OnClickListener() {
+                    public void onClick(android.content.DialogInterface d, int w) {
+                        saver.save(e.getText().toString());
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void showText(String title, String body) {
+        TextView t = text(body, 12, TEXT, false);
+        t.setTypeface(Typeface.MONOSPACE);
+        t.setTextIsSelectable(true);
+        t.setPadding(dp(20), dp(10), dp(20), dp(10));
+        ScrollView s = new ScrollView(this);
+        s.addView(t);
+        new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle(title)
+                .setView(s)
+                .setPositiveButton("Close", null)
+                .show();
+    }
+
+    private static final String MOD_HELP =
+            "A mod is a JavaScript file. Start it with a header:\n\n" +
+            "// @name My Mod\n// @description What it does\n// @version 1.0\n\n" +
+            "EVENTS  mod.on(name, function (e) { ... })\n" +
+            "  join         e.server\n" +
+            "  leave        e.reason\n" +
+            "  kicked       e.reason\n" +
+            "  chat         e.message, e.sender, e.raw, e.system\n" +
+            "  playerEnter  e.name, e.distance, e.friend\n" +
+            "  playerLeave  e.name\n" +
+            "  health       e.health (0-20)\n" +
+            "  death        e.pos\n" +
+            "  second       every second while online\n\n" +
+            "TIMERS\n" +
+            "  mod.every(ms, fn)   repeat, returns an id\n" +
+            "  mod.after(ms, fn)   once\n" +
+            "  mod.cancel(id)\n\n" +
+            "SAVED DATA (kept between restarts)\n" +
+            "  mod.storage.get(key, default)\n" +
+            "  mod.storage.set(key, value)\n\n" +
+            "BOT\n" +
+            "  bot.name, bot.server, bot.online()\n" +
+            "  bot.pos()      {x, y, z, yaw}\n" +
+            "  bot.health()   0-20\n" +
+            "  bot.players()  [{name, distance, dx, dy, dz, friend}]\n" +
+            "  bot.entities() same, with kind: player/hostile/animal/item\n" +
+            "  bot.chat(text)       (max 1 per 1.5 s)\n" +
+            "  bot.command('home')  same as chat('/home')\n" +
+            "  bot.jump()           do the anti-AFK action now\n" +
+            "  bot.log(text)        shows in the mod log\n" +
+            "  bot.alert(title, text)  phone notification\n" +
+            "  bot.disconnect(reason)  safety logout\n\n" +
+            "EXAMPLE\n" +
+            "mod.on('chat', function (e) {\n" +
+            "  if (e.message === '!ping') bot.chat('pong');\n" +
+            "});\n\n" +
+            "Mods can't use files, the internet or Java. Each event must finish quickly; a mod that keeps failing is turned off.";
 
     interface Toggle {
         void set(boolean v);
@@ -1081,6 +1436,8 @@ public class MainActivity extends Activity implements Hub.Listener {
             StringBuilder sb = new StringBuilder();
             for (String l : Hub.recentLog(7)) sb.append(l).append('\n');
             recent.setText(sb.length() == 0 ? "Nothing yet." : sb.toString().trim());
+        } else if (tab == T_MODULES) {
+            if (ModEngine.version != shownModsVersion) refreshMods();
         } else if (tab == T_CHAT) {
             int v = Hub.chatVersion;
             if (v != shownChat) {

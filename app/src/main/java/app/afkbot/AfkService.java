@@ -38,6 +38,7 @@ public class AfkService extends Service {
             return START_NOT_STICKY;
         }
         startForeground(NOTIF_ID, buildNotification("Starting..."));
+        ModStore.init(this);
         if (bot == null) {
             acquireLocks();
             Bot.Config c = Settings.get(this);

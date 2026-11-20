@@ -125,6 +125,8 @@ final class Bot {
     private volatile double nearestPlayer = -1;
     private int sneakTicks;
     private volatile boolean batchPending;
+    private volatile String pendingLogout;
+    private float lastHealthEvent = -1;
     private volatile int state;
     private int threshold = -1;
     private Cipher encrypt, decrypt;
@@ -201,6 +203,7 @@ final class Bot {
                 }
             } catch (SafetyLogout s) {
                 Hub.log("SAFETY LOGOUT: " + s.getMessage());
+                emitMod("leave", "reason", s.getMessage());
                 Hub.alert("Logged out for safety", s.getMessage());
                 cleanup();
                 if (cfg.rejoinMinutes <= 0) {
@@ -221,6 +224,7 @@ final class Bot {
                 Hub.log("Kicked: " + k.getMessage());
                 Hub.status("Kicked: " + firstLine(k.getMessage()), Hub.RED);
                 Hub.alert("Kicked from " + serverLabel, firstLine(k.getMessage()));
+                emitMod("kicked", "reason", k.getMessage());
             } catch (Exception e) {
                 if (!stopped) {
                     String m = e instanceof SocketTimeoutException ? "server stopped responding (timed out)"
@@ -228,6 +232,7 @@ final class Bot {
                     Hub.log("Disconnected: " + m);
                     Hub.status("Disconnected", Hub.RED);
                     if (joinedAt > 0) Hub.alert("Disconnected from " + serverLabel, m + (cfg.autoReconnect ? " - reconnecting" : ""));
+                    emitMod("leave", "reason", m);
                 }
             } finally {
                 playStart = joinedAt;
@@ -272,7 +277,22 @@ final class Bot {
         return i < 0 ? s : s.substring(0, i);
     }
 
+    /** Makes the bot do its anti-AFK action right now (used by mods). */
+    void forceAction() {
+        synchronized (this) {
+            nextJumpAt = 0;
+        }
+    }
+
+    /** Disconnects like a safety logout (used by mods). */
+    void modDisconnect(String reason) {
+        pendingLogout = reason;
+        closeSocket();
+    }
+
     private void cleanup() {
+        pendingLogout = null;
+        lastHealthEvent = -1;
         if (ticker != null) {
             ticker.shutdownNow();
             ticker = null;
@@ -421,11 +441,17 @@ final class Bot {
             }
         }, 50, 50, TimeUnit.MILLISECONDS);
 
-        while (!stopped) {
-            Buf.In p = readPacket(in);
-            if (p == null) continue;
-            int pid = p.varInt();
-            handle(pid, p, din);
+        try {
+            while (!stopped) {
+                Buf.In p = readPacket(in);
+                if (p == null) continue;
+                int pid = p.varInt();
+                handle(pid, p, din);
+            }
+        } catch (IOException e) {
+            String why = pendingLogout;
+            if (why != null && !(e instanceof SafetyLogout)) throw new SafetyLogout(why);
+            throw e;
         }
     }
 
@@ -669,6 +695,7 @@ final class Bot {
                 if (joinedAt == 0) joinedAt = System.currentTimeMillis();
             }
             Hub.log("Joined the server!");
+            emitMod("join", "server", serverLabel);
             if (legacy()) sendSettings(id(Proto.P_S_SETTINGS));
             Hub.status("Online on " + serverLabel + " as " + playerName, Hub.GREEN);
         } else if (pid == id(Proto.P_C_DISCONNECT)) {
@@ -689,6 +716,11 @@ final class Bot {
                 health = h;
                 if (h > 0) respawnPending = false;
             }
+            if (h != lastHealthEvent) {
+                lastHealthEvent = h;
+                emitMod("health", "health", h);
+            }
+            if (died) emitMod("death", "pos", posText());
             if (h > 0 && cfg.logoutHealth() > 0 && h < cfg.logoutHealth()) {
                 throw new SafetyLogout(String.format(Locale.US, "health dropped to %.1f/20 (%.1f hearts) at %s", h, h / 2, posText()));
             }
@@ -718,6 +750,10 @@ final class Bot {
             if (!overlay && !msg.isEmpty()) {
                 if (msg.length() > 400) msg = msg.substring(0, 400) + "...";
                 Hub.chat(msg);
+                // many servers send player chat as "<Name> message" system messages
+                java.util.regex.Matcher mm = CHAT_LINE.matcher(msg);
+                if (mm.matches()) emitChat(mm.group(1), mm.group(2), msg, true);
+                else emitChat(null, msg, msg, true);
             }
         } else if (handleEntity(pid, p)) {
             // handled
@@ -753,8 +789,9 @@ final class Bot {
             int n = p.varInt();
             for (int i = 0; i < n; i++) {
                 World.Ent e = World.remove(p.varInt());
-                if (e != null && e.kind == 'p' && cfg.visualRange) {
-                    Hub.log(World.label(e) + " left visual range");
+                if (e != null && e.kind == 'p') {
+                    if (cfg.visualRange) Hub.log(World.label(e) + " left visual range");
+                    emitMod("playerLeave", "name", World.label(e));
                 }
             }
             updateNearest();
@@ -807,6 +844,28 @@ final class Bot {
         return true;
     }
 
+    private static final java.util.regex.Pattern CHAT_LINE = java.util.regex.Pattern.compile("^<([A-Za-z0-9_]{1,16})> (.*)$");
+
+    private void emitChat(String sender, String message, String raw, boolean system) {
+        try {
+            JSONObject o = new JSONObject().put("message", message).put("raw", raw).put("system", system);
+            if (sender != null) o.put("sender", sender);
+            ModEngine.emit("chat", o);
+        } catch (org.json.JSONException ignored) {
+        }
+    }
+
+    private static void emitMod(String event, String key, Object value) {
+        try {
+            ModEngine.emit(event, new JSONObject().put(key, value));
+        } catch (org.json.JSONException ignored) {
+        }
+    }
+
+    String playerName() {
+        return playerName;
+    }
+
     /** Reads the dimension part of the login/respawn packet. */
     private void onDimension(Buf.In p) throws IOException {
         String name;
@@ -826,6 +885,10 @@ final class Bot {
         String name = World.label(e);
         boolean friend = cfg.friendSet().contains(name);
         double d = distanceTo(e);
+        try {
+            ModEngine.emit("playerEnter", new JSONObject().put("name", name).put("distance", Math.round(d)).put("friend", friend));
+        } catch (org.json.JSONException ignored) {
+        }
         if (cfg.visualRange) {
             String msg = String.format(Locale.US, "%s%s entered visual range (%.0f blocks)", name, friend ? " (friend)" : "", d);
             Hub.log(msg);
@@ -905,6 +968,7 @@ final class Bot {
         String msg = p.str();
         String name = World.nameOf(sender);
         Hub.chat((name != null ? "<" + name + "> " : "<?> ") + msg);
+        emitChat(name, msg, (name != null ? "<" + name + "> " : "") + msg, false);
     }
 
     private void updateNearest() {
@@ -1086,6 +1150,7 @@ final class Bot {
         }
         if (sneakTicks > 0 && --sneakTicks == 0) setSneak(false);
         if (detail) updateDetail();
+        if (tick % 20 == 0) ModEngine.emit("second", null);
         if (tick % 200 == 0) MapData.trim(World.selfX, World.selfZ, Math.max(cfg.viewDistance, Hub.serverViewDistance) + 3);
     }
 
