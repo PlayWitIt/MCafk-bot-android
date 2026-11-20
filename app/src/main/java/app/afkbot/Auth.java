@@ -79,6 +79,25 @@ final class Auth {
         prefs(c).edit().clear().apply();
     }
 
+    private static final Object WAKE = new Object();
+
+    /** Called when the app comes back to the screen so a waiting sign-in checks again right away. */
+    static void wake() {
+        synchronized (WAKE) {
+            WAKE.notifyAll();
+        }
+    }
+
+    private static void pause(long ms) throws InterruptedException {
+        synchronized (WAKE) {
+            WAKE.wait(ms);
+        }
+    }
+
+    private static boolean isNetworkProblem(Exception e) {
+        return e instanceof IOException && !(e instanceof AuthException);
+    }
+
     /** Full interactive sign-in. Blocks until the user enters the code (or it expires). */
     static Session signIn(Context c, Cancel cancel) throws Exception {
         JSONObject dc = new JSONObject(post("https://login.live.com/oauth20_connect.srf", form(
@@ -92,13 +111,25 @@ final class Auth {
         Hub.authUrl = verify;
         Hub.log("Sign-in code: " + userCode + "  (enter it at " + verify + ")");
         Hub.fire();
+        boolean warned = false;
         try {
             while (System.currentTimeMillis() < expires) {
-                Thread.sleep(interval * 1000L);
+                pause(interval * 1000L);
                 if (cancel != null && cancel.cancelled()) throw new AuthException("Sign-in cancelled");
-                Resp r = request("POST", "https://login.live.com/oauth20_token.srf?client_id=" + CLIENT_ID, form(
-                        "client_id", CLIENT_ID, "device_code", deviceCode,
-                        "grant_type", "urn:ietf:params:oauth:grant-type:device_code"), "application/x-www-form-urlencoded", null);
+                Resp r;
+                try {
+                    r = request("POST", "https://login.live.com/oauth20_token.srf?client_id=" + CLIENT_ID, form(
+                            "client_id", CLIENT_ID, "device_code", deviceCode,
+                            "grant_type", "urn:ietf:params:oauth:grant-type:device_code"), "application/x-www-form-urlencoded", null);
+                } catch (Exception e) {
+                    if (!isNetworkProblem(e)) throw e;
+                    // Android often blocks network for apps in the background (while you're in the browser).
+                    if (!warned) {
+                        Hub.log("No network while in the background - come back to AFK Bot after entering the code");
+                        warned = true;
+                    }
+                    continue;
+                }
                 JSONObject j = json(r, "Microsoft (checking the code)");
                 if (j.has("error")) {
                     String e = j.getString("error");
@@ -113,7 +144,15 @@ final class Auth {
                 Hub.authCode = null;
                 Hub.log("Step 1/4 OK: Microsoft account accepted");
                 Hub.fire();
-                return finish(c, j);
+                for (int attempt = 1; ; attempt++) {
+                    try {
+                        return finish(c, j);
+                    } catch (Exception e) {
+                        if (!isNetworkProblem(e) || attempt >= 20) throw e;
+                        Hub.log("Network problem (" + e.getMessage() + "), retrying...");
+                        pause(5000);
+                    }
+                }
             }
             throw new AuthException("Sign-in code expired, try again");
         } finally {

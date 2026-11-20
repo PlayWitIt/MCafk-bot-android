@@ -57,6 +57,7 @@ public class MainActivity extends Activity implements Hub.Listener {
     protected void onResume() {
         super.onResume();
         Hub.addListener(this);
+        Auth.wake();
         onChange();
     }
 
