@@ -1710,6 +1710,7 @@ final class Bot {
             if (manual) {
                 jumping = false;
                 ground = physicsStep();
+                driveDiag(now);
                 groundY = y;
                 doMove = true;
                 nextJumpAt = now + nextAfkDelaySeconds() * 1000L; // anti-AFK waits while you drive
@@ -1867,6 +1868,81 @@ final class Bot {
         if (Math.abs(vxM) < 0.003) vxM = 0;
         if (Math.abs(vzM) < 0.003) vzM = 0;
         return onGroundM;
+    }
+
+    // ---- drive diagnostics: every 2 s while a direction is held, say what is happening ----
+    private long diagAt;
+    private double diagX, diagZ;
+    private int diagCorr, diagBlocked, diagTicks;
+
+    private void driveDiag(long now) {
+        boolean pressing = Math.abs(inForward) > 0.3f || Math.abs(inStrafe) > 0.3f || inJump;
+        if (hCollideM && pressing) diagBlocked++;
+        if (pressing) diagTicks++;
+        if (diagAt == 0) {
+            diagAt = now;
+            diagX = x;
+            diagZ = z;
+            diagCorr = corrections;
+            return;
+        }
+        if (now - diagAt < 2000) return;
+        if (diagTicks > 0) {
+            double moved = Math.sqrt((x - diagX) * (x - diagX) + (z - diagZ) * (z - diagZ));
+            int bx = (int) Math.floor(x), by = (int) Math.floor(y), bz = (int) Math.floor(z);
+            boolean loaded = MapData.stateAt(bx, by, bz) >= 0;
+            String why;
+            if (!loaded) why = "the chunk you're in isn't loaded yet (keep Show terrain or 3D on)";
+            else if (corrections > diagCorr) why = "the server pulled you back " + (corrections - diagCorr) + "x (see 'Server corrected' lines)";
+            else if (moved < 0.2 && diagBlocked > diagTicks / 2) why = "a block is in the way (" + blocksAround() + ")";
+            else if (moved < 0.2) why = "not moving although keys are held (" + blocksAround() + ", onGround=" + onGroundM + ")";
+            else why = "ok";
+            Hub.log(String.format(Locale.US, "Drive: held %.1fs, moved %.2f blocks, at %.1f, %.1f, %.1f - %s", diagTicks / 20.0, moved, x, y, z, why));
+        }
+        diagAt = now;
+        diagX = x;
+        diagZ = z;
+        diagCorr = corrections;
+        diagBlocked = 0;
+        diagTicks = 0;
+    }
+
+    /** One-tap movement test: walks forward 1.5 s, then back, and logs whether you moved and whether the server rejected it. */
+    String testWalk() {
+        final ScheduledExecutorService t = ticker;
+        if (t == null || state != PLAY || !havePos) return "Start AFK first";
+        final boolean wasManual = manual;
+        final double sx = x, sz = z;
+        final int c0 = corrections;
+        final double[] fwd = new double[1];
+        final int[] corrFwd = new int[1];
+        Hub.log("Walk test: forward 1.5 s, then back 1.5 s...");
+        manual = true;
+        inForward = 1;
+        t.schedule(new Runnable() {
+            @Override
+            public void run() {
+                synchronized (Bot.this) {
+                    fwd[0] = Math.sqrt((x - sx) * (x - sx) + (z - sz) * (z - sz));
+                }
+                corrFwd[0] = corrections - c0;
+                inForward = -1;
+            }
+        }, 1500, TimeUnit.MILLISECONDS);
+        t.schedule(new Runnable() {
+            @Override
+            public void run() {
+                inForward = 0;
+                int corr = corrections - c0;
+                String result;
+                if (corr > 0) result = "FAILED - the server pulled you back " + corr + " time(s): the server/anticheat is rejecting the movement";
+                else if (fwd[0] < 0.5) result = "FAILED - you didn't move (" + blocksAround() + (MapData.stateAt((int) Math.floor(x), (int) Math.floor(y), (int) Math.floor(z)) < 0 ? ", chunk not loaded" : "") + ")";
+                else result = String.format(Locale.US, "OK - walked %.1f blocks forward and back with no corrections", fwd[0]);
+                Hub.log("Walk test result: " + result);
+                manual = wasManual;
+            }
+        }, 3300, TimeUnit.MILLISECONDS);
+        return "Testing walking for 3 seconds - see the log";
     }
 
     // ---- vanilla block properties that change movement ----

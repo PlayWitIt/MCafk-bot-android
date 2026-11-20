@@ -696,6 +696,12 @@ public class MainActivity extends Activity implements Hub.Listener {
                 showInventory();
             }
         });
+        actionChip(acts, "Test walking", new Runnable() {
+            public void run() {
+                Bot b = Hub.bot;
+                toast(b == null ? "Start AFK first" : b.testWalk());
+            }
+        });
         texChip = text("Textures", 13, TEXT, true);
         texChip.setPadding(dp(14), dp(8), dp(14), dp(8));
         LinearLayout.LayoutParams tcl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
