@@ -423,6 +423,7 @@ final class Bot {
             try {
                 vdata = vl.load(Proto.PROTOCOLS[idx]);
                 Hub.versionData = vdata;
+                Shapes.setVersion(vdata);
                 Hub.log("Chests, inventory and block names ready");
             } catch (Exception e) {
                 Hub.log("Container support unavailable: " + e.getMessage());
@@ -969,6 +970,32 @@ final class Bot {
         int n = 0;
         for (Inv.Item it : l) if (it != null) n++;
         return n;
+    }
+
+    /** Doors, trapdoors, gates, buttons and levers near the player, nearest first: {block, name, distance}. */
+    static java.util.List<Object[]> nearbyUsable(int range) {
+        java.util.List<Object[]> out = new java.util.ArrayList<Object[]>();
+        ProtoDef.VersionData vd = Hub.versionData;
+        if (vd == null || !World.inWorld) return out;
+        int px = (int) Math.floor(World.selfX), py = (int) Math.floor(World.selfY), pz = (int) Math.floor(World.selfZ);
+        for (int x = px - range; x <= px + range; x++)
+            for (int y = py - range; y <= py + range; y++)
+                for (int z = pz - range; z <= pz + range; z++) {
+                    int st = MapData.stateAt(x, y, z);
+                    if (st <= 0) continue;
+                    int t = Shapes.type(st);
+                    if (t != Shapes.DOOR && t != Shapes.TRAPDOOR && t != Shapes.GATE && t != Shapes.BUTTON && t != Shapes.LEVER) continue;
+                    if (t == Shapes.DOOR && "upper".equals(Shapes.prop(st, "half"))) continue; // list each door once
+                    int[] b = {x, y, z, 1};
+                    out.add(new Object[]{b, vd.blockName(st), World.reach(b), st});
+                }
+        java.util.Collections.sort(out, new java.util.Comparator<Object[]>() {
+            @Override
+            public int compare(Object[] a, Object[] b) {
+                return Double.compare((Double) a[2], (Double) b[2]);
+            }
+        });
+        return out;
     }
 
     /** Container blocks within range of the player, nearest first: {x, y, z} plus name. */
@@ -1525,15 +1552,22 @@ final class Bot {
         return collides(px - W, y - 0.6, pz - W, px + W, y - 0.01, pz + W);
     }
 
-    private static boolean solid(int bx, int by, int bz) {
-        return (MapData.flagsAt(bx, by, bz) & 1) != 0;
+    /** Collision boxes of the block at a position (unloaded chunks count as solid so you never walk into the void). */
+    private static float[][] boxesAt(int bx, int by, int bz) {
+        int st = MapData.stateAt(bx, by, bz);
+        if (st < 0) return Shapes.FULL;
+        if (st == 0) return Shapes.NONE;
+        if (Shapes.known()) return Shapes.collision(st);
+        return (MapData.flagsAt(bx, by, bz) & 1) != 0 ? Shapes.FULL : Shapes.NONE;
     }
 
     private static boolean collides(double x0, double y0, double z0, double x1, double y1, double z1) {
         for (int bx = (int) Math.floor(x0); bx <= (int) Math.floor(x1 - 1e-7); bx++)
-            for (int by = (int) Math.floor(y0); by <= (int) Math.floor(y1 - 1e-7); by++)
+            for (int by = (int) Math.floor(y0) - 1; by <= (int) Math.floor(y1 - 1e-7); by++) // -1: fences/walls are 1.5 tall
                 for (int bz = (int) Math.floor(z0); bz <= (int) Math.floor(z1 - 1e-7); bz++)
-                    if (solid(bx, by, bz)) return true;
+                    for (float[] b : boxesAt(bx, by, bz))
+                        if (x1 > bx + b[0] + 1e-7 && x0 < bx + b[3] - 1e-7 && y1 > by + b[1] + 1e-7 && y0 < by + b[4] - 1e-7
+                                && z1 > bz + b[2] + 1e-7 && z0 < bz + b[5] - 1e-7) return true;
         return false;
     }
 
@@ -1598,32 +1632,31 @@ final class Bot {
         send(new Buf(id(Proto.P_S_PLAYER_INPUT)).u8(flags));
     }
 
-    /** How far we can move along an axis (0 x, 1 y, 2 z) before hitting a solid block (vanilla-style AABB clipping). */
+    /** How far we can move along an axis (0 x, 1 y, 2 z) before hitting a block's real shape (vanilla-style AABB clipping). */
     private double sweep(int axis, double d) {
         if (d == 0) return 0;
         double[] lo = {x - W, y, z - W}, hi = {x + W, y + H, z + W};
-        // the area swept by the box along the axis
         double[] slo = lo.clone(), shi = hi.clone();
         if (d > 0) shi[axis] += d;
         else slo[axis] += d;
         int x0 = (int) Math.floor(slo[0]), x1 = (int) Math.floor(shi[0] - 1e-7);
-        int y0 = (int) Math.floor(slo[1]), y1 = (int) Math.floor(shi[1] - 1e-7);
+        int y0 = (int) Math.floor(slo[1]) - 1, y1 = (int) Math.floor(shi[1] - 1e-7);
         int z0 = (int) Math.floor(slo[2]), z1 = (int) Math.floor(shi[2] - 1e-7);
         if ((long) (x1 - x0 + 1) * (y1 - y0 + 1) * (z1 - z0 + 1) > 4000) return 0; // absurd move, refuse
         for (int bx = x0; bx <= x1; bx++)
             for (int by = y0; by <= y1; by++)
                 for (int bz = z0; bz <= z1; bz++) {
-                    if (!solid(bx, by, bz)) continue;
-                    double[] b0 = {bx, by, bz}, b1 = {bx + 1, by + 1, bz + 1};
-                    // must overlap on the other two axes
-                    boolean overlap = true;
-                    for (int a = 0; a < 3; a++) {
-                        if (a == axis) continue;
-                        if (hi[a] <= b0[a] + 1e-7 || lo[a] >= b1[a] - 1e-7) overlap = false;
+                    for (float[] bb : boxesAt(bx, by, bz)) {
+                        double[] b0 = {bx + bb[0], by + bb[1], bz + bb[2]}, b1 = {bx + bb[3], by + bb[4], bz + bb[5]};
+                        boolean overlap = true;
+                        for (int a = 0; a < 3; a++) {
+                            if (a == axis) continue;
+                            if (hi[a] <= b0[a] + 1e-7 || lo[a] >= b1[a] - 1e-7) overlap = false;
+                        }
+                        if (!overlap) continue;
+                        if (d > 0 && b0[axis] >= hi[axis] - 1e-7) d = Math.min(d, b0[axis] - hi[axis]);
+                        else if (d < 0 && b1[axis] <= lo[axis] + 1e-7) d = Math.max(d, b1[axis] - lo[axis]);
                     }
-                    if (!overlap) continue;
-                    if (d > 0 && b0[axis] >= hi[axis] - 1e-7) d = Math.min(d, b0[axis] - hi[axis]);
-                    else if (d < 0 && b1[axis] <= lo[axis] + 1e-7) d = Math.max(d, b1[axis] - lo[axis]);
                 }
         return d;
     }

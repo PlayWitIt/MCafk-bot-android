@@ -163,7 +163,7 @@ public class World3DView extends GLSurfaceView implements GLSurfaceView.Renderer
         return new float[]{out[0] / out[3], out[1] / out[3], out[2] / out[3]};
     }
 
-    /** Voxel ray walk (Amanatides & Woo). Returns {x, y, z, face} of the first visible block, or null. */
+    /** Voxel ray walk (Amanatides & Woo) that also hits small blocks (buttons, levers, doors) by their real shape. */
     static int[] raycast(double ox, double oy, double oz, double dx, double dy, double dz, double max) {
         int x = (int) Math.floor(ox), y = (int) Math.floor(oy), z = (int) Math.floor(oz);
         int sx = dx > 0 ? 1 : -1, sy = dy > 0 ? 1 : -1, sz = dz > 0 ? 1 : -1;
@@ -172,13 +172,22 @@ public class World3DView extends GLSurfaceView implements GLSurfaceView.Renderer
         int face = -1;
         double t = 0;
         while (t < max) {
-            int c = MapData.blockColor(x, y, z);
-            if (c > 0 && c != MapData.WATER) return new int[]{x, y, z, face < 0 ? 1 : face};
+            int st = MapData.stateAt(x, y, z);
+            if (st > 0) {
+                int c = MapData.colorOf(st);
+                if (c > 0 && c != MapData.WATER) {
+                    if (!Shapes.known() || Shapes.isFull(st)) return new int[]{x, y, z, face < 0 ? 1 : face};
+                    for (float[] b : Shapes.outline(st)) {
+                        int f = rayBox(ox, oy, oz, dx, dy, dz, x + b[0], y + b[1], z + b[2], x + b[3], y + b[4], z + b[5]);
+                        if (f >= 0) return new int[]{x, y, z, f};
+                    }
+                }
+            }
             if (tx < ty && tx < tz) {
                 x += sx;
                 t = tx;
                 tx += tdx;
-                face = sx > 0 ? 4 : 5; // hit the west/east side
+                face = sx > 0 ? 4 : 5;
             } else if (ty < tz) {
                 y += sy;
                 t = ty;
@@ -192,6 +201,35 @@ public class World3DView extends GLSurfaceView implements GLSurfaceView.Renderer
             }
         }
         return null;
+    }
+
+    /** Ray vs box: returns the face hit (0 down 1 up 2 north 3 south 4 west 5 east) or -1. */
+    private static int rayBox(double ox, double oy, double oz, double dx, double dy, double dz,
+                              double x0, double y0, double z0, double x1, double y1, double z1) {
+        double tmin = -1e9, tmax = 1e9;
+        int face = -1;
+        double[] o = {ox, oy, oz}, d = {dx, dy, dz}, lo = {x0, y0, z0}, hi = {x1, y1, z1};
+        int[][] faces = {{4, 5}, {0, 1}, {2, 3}};
+        for (int a = 0; a < 3; a++) {
+            if (Math.abs(d[a]) < 1e-9) {
+                if (o[a] < lo[a] || o[a] > hi[a]) return -1;
+                continue;
+            }
+            double t1 = (lo[a] - o[a]) / d[a], t2 = (hi[a] - o[a]) / d[a];
+            int f = d[a] > 0 ? faces[a][0] : faces[a][1];
+            if (t1 > t2) {
+                double tmp = t1;
+                t1 = t2;
+                t2 = tmp;
+            }
+            if (t1 > tmin) {
+                tmin = t1;
+                face = f;
+            }
+            tmax = Math.min(tmax, t2);
+            if (tmin > tmax) return -1;
+        }
+        return tmax >= 0 ? face : -1;
     }
 
     // ================================================================ mesh building
@@ -241,31 +279,48 @@ public class World3DView extends GLSurfaceView implements GLSurfaceView.Renderer
     private static final float[] AO = {1f, 0.82f, 0.68f, 0.55f};
 
     private static boolean opaque(int c) {
-        return c > 0 && c != MapData.WATER;
+        return c > 0 && c != MapData.WATER; // shaped blocks (-2) and air don't darken corners
     }
 
     private void build(int ox, int oy, int oz, int r) {
         FloatList solid = new FloatList(1 << 17), water = new FloatList(1 << 13);
         int vr = Math.max(10, r / 2 + 8);
-        // cache the block colours in the region (+1 border) for fast neighbour/AO lookups
+        // cache: colour for full blocks, -2 for shaped (non-full) blocks, 0 air, -1 unknown, WATER for water
         int sx = 2 * r + 3, sy = 2 * vr + 3, sz = 2 * r + 3;
         int[] cache = new int[sx * sy * sz];
+        int[] states = new int[sx * sy * sz];
+        boolean shapes = Shapes.known();
         for (int x = 0; x < sx; x++)
             for (int z = 0; z < sz; z++)
-                for (int y = 0; y < sy; y++)
-                    cache[(x * sz + z) * sy + y] = MapData.blockColor(ox + x - r - 1, oy + y - vr - 1, oz + z - r - 1);
+                for (int y = 0; y < sy; y++) {
+                    int st = MapData.stateAt(ox + x - r - 1, oy + y - vr - 1, oz + z - r - 1);
+                    int k = (x * sz + z) * sy + y;
+                    states[k] = st;
+                    if (st < 0) {
+                        cache[k] = -1;
+                        continue;
+                    }
+                    int c = MapData.colorOf(st);
+                    if (c > 0 && c != MapData.WATER && shapes && !Shapes.isFull(st)) c = -2;
+                    cache[k] = c;
+                }
         for (int x = -r; x <= r; x++) {
             for (int z = -r; z <= r; z++) {
                 if (x * x + z * z > r * r) continue;
                 for (int y = -vr; y <= vr; y++) {
                     int col = at(cache, sx, sy, sz, r, vr, x, y, z);
+                    int wx = ox + x, wy = oy + y, wz = oz + z;
+                    if (col == -2) {
+                        int st = states[((x + r + 1) * sz + (z + r + 1)) * sy + (y + vr + 1)];
+                        shaped(solid, x, y, z, MapData.colorOf(st), Shapes.outline(st), 0.93f + ((hash(wx, wy, wz) & 255) / 255f) * 0.14f);
+                        continue;
+                    }
                     if (col <= 0) continue;
                     boolean isWater = col == MapData.WATER;
-                    int wx = ox + x, wy = oy + y, wz = oz + z;
                     float noise = 0.93f + ((hash(wx, wy, wz) & 255) / 255f) * 0.14f;
                     for (int f = 0; f < 6; f++) {
                         int n = at(cache, sx, sy, sz, r, vr, x + DIRS[f][0], y + DIRS[f][1], z + DIRS[f][2]);
-                        boolean show = isWater ? n == 0 : (n == 0 || n == MapData.WATER);
+                        boolean show = isWater ? n == 0 || n == -2 : (n == 0 || n == MapData.WATER || n == -2);
                         if (!show) continue;
                         float shade = SHADE[f] * (isWater ? 1f : noise);
                         float cr = ((col >> 16) & 255) / 255f, cg = ((col >> 8) & 255) / 255f, cb = (col & 255) / 255f;
@@ -274,7 +329,6 @@ public class World3DView extends GLSurfaceView implements GLSurfaceView.Renderer
                         float[][] q = FACE[f];
                         float[] ao = new float[4];
                         for (int k = 0; k < 4; k++) ao[k] = isWater ? 1f : vertexAo(cache, sx, sy, sz, r, vr, x, y, z, f, q[k]);
-                        // flip the quad diagonal to avoid AO artefacts
                         int[] order = ao[0] + ao[2] < ao[1] + ao[3] ? new int[]{1, 2, 3, 1, 3, 0} : new int[]{0, 1, 2, 0, 2, 3};
                         for (int k : order) {
                             float s = shade * ao[k];
@@ -292,6 +346,21 @@ public class World3DView extends GLSurfaceView implements GLSurfaceView.Renderer
         pendingWaterCount = water.size / STRIDE;
         pendingWater = water.toBuffer();
         pendingSolid = solid.toBuffer();
+    }
+
+    /** Draws a non-full block (door, slab, stairs, fence, button...) as its real boxes. */
+    private static void shaped(FloatList out, int x, int y, int z, int col, float[][] boxes, float noise) {
+        float cr = ((col >> 16) & 255) / 255f, cg = ((col >> 8) & 255) / 255f, cb = (col & 255) / 255f;
+        for (float[] b : boxes) {
+            for (int f = 0; f < 6; f++) {
+                float s = SHADE[f] * noise;
+                float[][] q = FACE[f];
+                for (int k : new int[]{0, 1, 2, 0, 2, 3}) {
+                    out.add(x + b[0] + q[k][0] * (b[3] - b[0]), y + b[1] + q[k][1] * (b[4] - b[1]), z + b[2] + q[k][2] * (b[5] - b[2]));
+                    out.add(cr * s, cg * s, cb * s, 1f);
+                }
+            }
+        }
     }
 
     private static int at(int[] cache, int sx, int sy, int sz, int r, int vr, int x, int y, int z) {

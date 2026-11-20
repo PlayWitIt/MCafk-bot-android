@@ -103,7 +103,10 @@ public class MainActivity extends Activity implements Hub.Listener {
                 updateViewLabel();
             } else if (tab == T_HOME) {
                 miniRadar.invalidate();
-                if (System.currentTimeMillis() - lastStorageScan > 2000) refreshStorage();
+                if (System.currentTimeMillis() - lastStorageScan > 2000) {
+                    refreshStorage();
+                    refreshUsable();
+                }
             }
             syncContainerDialog();
             ui.postDelayed(this, 500); // 2 frames per second is plenty and nearly free
@@ -299,6 +302,7 @@ public class MainActivity extends Activity implements Hub.Listener {
         statNext = tile(grid3, "Next action");
 
         buildStorageCard(col);
+        buildUsableCard(col);
 
         LinearLayout rc = card(col);
         LinearLayout rh = row(rc);
@@ -650,7 +654,7 @@ public class MainActivity extends Activity implements Hub.Listener {
         targetBar.setBackground(round(0xDD0B0D12, dp(12), STROKE));
         targetText = text("", 13, TEXT, false);
         targetBar.addView(targetText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-        openBtn = smallButton("Open", ACCENT);
+        openBtn = smallButton("Use", ACCENT);
         LinearLayout.LayoutParams ob = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38));
         openBtn.setLayoutParams(ob);
         targetBar.addView(openBtn);
@@ -915,7 +919,7 @@ public class MainActivity extends Activity implements Hub.Listener {
         int st = MapData.stateAt(t[0], t[1], t[2]);
         if (vd != null && st > 0) name = vd.blockName(st);
         double r = World3DView.reach(t);
-        targetText.setText(String.format(Locale.US, "%s  •  %d, %d, %d  •  %.1f m%s", name, t[0], t[1], t[2], r, r > 4.5 ? "  (too far to open)" : ""));
+        targetText.setText(String.format(Locale.US, "%s  •  %d, %d, %d  •  %.1f m%s", name, t[0], t[1], t[2], r, r > 4.5 ? "  (too far)" : ""));
         Bot b = Hub.bot;
         openBtn.setVisibility(b != null && b.containersSupported() ? View.VISIBLE : View.GONE);
         openBtn.setAlpha(r <= 4.5 ? 1f : 0.45f);
@@ -1614,7 +1618,60 @@ public class MainActivity extends Activity implements Hub.Listener {
         }
     }
 
-    /** Opens a container block (from Home, Map or 3D). */
+    private LinearLayout usableList;
+
+    private void buildUsableCard(LinearLayout col) {
+        LinearLayout c = card(col);
+        c.addView(text("Doors & switches nearby", 15, TEXT, true));
+        c.addView(text("Open doors, trapdoors and gates, and press buttons and levers (that's how iron doors open). Within 4.5 blocks.", 12, MUTED, false));
+        usableList = new LinearLayout(this);
+        usableList.setOrientation(LinearLayout.VERTICAL);
+        c.addView(usableList);
+    }
+
+    private void refreshUsable() {
+        if (usableList == null) return;
+        usableList.removeAllViews();
+        Bot b = Hub.bot;
+        if (b == null || !World.inWorld || !b.containersSupported()) {
+            usableList.addView(text(b == null || !World.inWorld ? "Start AFK to see doors and switches." : "Needs a 1.20.2+ server.", 13, MUTED, false));
+            return;
+        }
+        List<Object[]> found = Bot.nearbyUsable(6);
+        if (found.isEmpty()) {
+            usableList.addView(text("No doors, buttons or levers within 6 blocks.", 13, MUTED, false));
+            return;
+        }
+        int shown = 0;
+        for (final Object[] f : found) {
+            if (++shown > 8) break;
+            final int[] blk = (int[]) f[0];
+            String name = (String) f[1];
+            int st = (Integer) f[3];
+            double dist = (Double) f[2];
+            int t = Shapes.type(st);
+            String state = "";
+            boolean iron = name.startsWith("Iron ");
+            if (t == Shapes.DOOR || t == Shapes.TRAPDOOR || t == Shapes.GATE)
+                state = "true".equals(Shapes.prop(st, "open")) ? " (open)" : " (closed)";
+            if (t == Shapes.LEVER) state = "true".equals(Shapes.prop(st, "powered")) ? " (on)" : " (off)";
+            LinearLayout r = row(usableList);
+            String hint = iron && (t == Shapes.DOOR || t == Shapes.TRAPDOOR) ? "\nneeds a button, lever or pressure plate" : "";
+            r.addView(text(String.format(Locale.US, "%s%s  \u2022  %.1f m%s", name, state, dist, hint), 13, dist <= 4.5 ? TEXT : MUTED, false),
+                    new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+            if (iron && (t == Shapes.DOOR || t == Shapes.TRAPDOOR)) continue;
+            Button use = smallButton(dist <= 4.5 ? (t == Shapes.BUTTON ? "Press" : t == Shapes.LEVER ? "Flip" : "Use") : "Too far", dist <= 4.5 ? ACCENT : SURFACE2);
+            use.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(36)));
+            r.addView(use);
+            use.setOnClickListener(new View.OnClickListener() {
+                public void onClick(View v) {
+                    openBlock(blk);
+                }
+            });
+        }
+    }
+
+    /** Uses a block: opens containers, toggles doors/levers, presses buttons (from Home, Map or 3D). */
     private void openBlock(int[] blk) {
         Bot b = Hub.bot;
         if (b == null || !World.inWorld) {
@@ -1630,15 +1687,27 @@ public class MainActivity extends Activity implements Hub.Listener {
             toast(String.format(Locale.US, "Too far (%.1f m) - get within 4.5 blocks first", r));
             return;
         }
+        int st = MapData.stateAt(blk[0], blk[1], blk[2]);
+        ProtoDef.VersionData vd = Hub.versionData;
+        String name = vd != null && st > 0 ? vd.blockName(st) : "block";
+        boolean container = Bot.isContainer(name);
         b.useBlock(blk[0], blk[1], blk[2], Bot.faceToward(blk));
-        toast("Opening...");
-        final int before = Inv.version;
-        ui.postDelayed(new Runnable() {
-            public void run() {
-                if (Inv.openId < 0 && Inv.version == before)
-                    toast("The server didn't open it - it may be locked, blocked by a block above, or you're too far");
-            }
-        }, 2500);
+        toast(container ? "Opening " + name + "..." : "Used " + name);
+        if (container) {
+            final int before = Inv.version;
+            ui.postDelayed(new Runnable() {
+                public void run() {
+                    if (Inv.openId < 0 && Inv.version == before)
+                        toast("The server didn't open it - it may be locked, blocked by a block above, or you're too far");
+                }
+            }, 2500);
+        } else {
+            ui.postDelayed(new Runnable() {
+                public void run() {
+                    refreshUsable();
+                }
+            }, 700);
+        }
     }
 
     /** Shows the open container in a dialog, unless the 3D tab is showing its own panel. */

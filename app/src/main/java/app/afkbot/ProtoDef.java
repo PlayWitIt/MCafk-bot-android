@@ -318,6 +318,9 @@ final class ProtoDef {
         final String[] itemNames;
         final int[] blockMin;
         final String[] blockNames;
+        final int[] shapes; // collision/outline shape type per block (see Shapes)
+        final String[][] propNames; // per block: property names
+        final String[][][] propValues; // per block: values of each property
 
         VersionData(JSONObject root) throws org.json.JSONException {
             def = new ProtoDef(root.getJSONObject("types"));
@@ -333,6 +336,29 @@ final class ProtoDef {
                 blockMin[i] = bm.getInt(i);
                 blockNames[i] = bn.getString(i);
             }
+            JSONArray sh = root.optJSONArray("shapes"), pr = root.optJSONArray("props");
+            shapes = new int[k];
+            propNames = new String[k][];
+            propValues = new String[k][][];
+            for (int i = 0; i < k; i++) {
+                shapes[i] = sh != null && i < sh.length() ? sh.getInt(i) : 1;
+                JSONArray ps = pr != null && i < pr.length() ? pr.getJSONArray(i) : new JSONArray();
+                propNames[i] = new String[ps.length()];
+                propValues[i] = new String[ps.length()][];
+                for (int j = 0; j < ps.length(); j++) {
+                    JSONArray one = ps.getJSONArray(j);
+                    propNames[i][j] = one.getString(0);
+                    JSONArray vals = one.getJSONArray(1);
+                    propValues[i][j] = new String[vals.length()];
+                    for (int v = 0; v < vals.length(); v++) propValues[i][j][v] = vals.getString(v);
+                }
+            }
+        }
+
+        int blockIndex(int state) {
+            int i = java.util.Arrays.binarySearch(blockMin, state);
+            if (i < 0) i = -i - 2;
+            return i;
         }
 
         /** Display name of a block state, e.g. "Chest". */

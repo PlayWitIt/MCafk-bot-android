@@ -87,6 +87,11 @@ final class MapData {
 
     private static int[] stateCache = new int[0];
 
+    /** Map colour of a block state (0 = transparent). */
+    static int colorOf(int state) {
+        return state <= 0 ? 0 : colorOfState(state);
+    }
+
     private static int colorOfState(int state) {
         int[] cache = stateCache;
         if (state >= 0 && state < cache.length) {
