@@ -232,7 +232,7 @@ public class World3DView extends GLSurfaceView implements GLSurfaceView.Renderer
                 if (c > 0 && c != MapData.WATER) {
                     if (!Shapes.known() || Shapes.isFull(st)) return new int[]{x, y, z, face < 0 ? 1 : face};
                     for (float[] b : Shapes.outline(st)) {
-                        int f = rayBox(ox, oy, oz, dx, dy, dz, x + b[0], y + b[1], z + b[2], x + b[3], y + b[4], z + b[5]);
+                        int f = rayBox(ox, oy, oz, dx, dy, dz, (double) x + b[0], (double) y + b[1], (double) z + b[2], (double) x + b[3], (double) y + b[4], (double) z + b[5]);
                         if (f >= 0) return new int[]{x, y, z, f};
                     }
                 }

@@ -46,13 +46,15 @@ public class MainActivity extends Activity implements Hub.Listener {
             GOOD = 0xFF34D399, BAD = 0xFFF87171, WARN = 0xFFFBBF24;
 
     private static final String[] TABS = {"Home", "Map", "3D", "Modules", "Chat", "Account"};
-    private static final String[] TAB_ICONS = {"\u25C9", "\u25CE", "\u25A3", "\u2630", "\u2709", "\u2687"};
+    private static final int[] TAB_ICONS = {Icons.HOME, Icons.MAP, Icons.CUBE, Icons.MODULES, Icons.CHAT, Icons.ACCOUNT};
     static final int T_HOME = 0, T_MAP = 1, T_3D = 2, T_MODULES = 3, T_CHAT = 4, T_ACCOUNT = 5;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private FrameLayout pages;
     private View[] pageViews = new View[TABS.length];
-    private TextView[] tabLabels = new TextView[TABS.length], tabIcons = new TextView[TABS.length];
+    private TextView[] tabLabels = new TextView[TABS.length];
+    private View[] tabIcons = new View[TABS.length];
+    private Icons[] tabIconDrawables = new Icons[TABS.length];
     private int tab = 0;
     private boolean resumed;
 
@@ -71,7 +73,8 @@ public class MainActivity extends Activity implements Hub.Listener {
     private EditText chatInput;
     private int shownChat = -1;
     // Account
-    private TextView account, codeBox, fullLog;
+    private TextView account, codeBox, codeBig, fullLog;
+    private View codeView;
     private Button signIn, signOut, openLink, copyCode, battery;
     private ScrollView logScroll;
     private String lastLog = "";
@@ -191,7 +194,15 @@ public class MainActivity extends Activity implements Hub.Listener {
         header.addView(logo, new LinearLayout.LayoutParams(dp(38), dp(30)));
         TextView title = text("  AFK Bot", 20, TEXT, true);
         header.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-        statusDot = text("●", 14, MUTED, false);
+        // status pill: a dot and a one-word state, readable from every tab
+        statusDot = text("\u25CF  Stopped", 12, MUTED, true);
+        statusDot.setPadding(dp(10), dp(5), dp(12), dp(5));
+        statusDot.setBackground(round(SURFACE2, dp(20), STROKE));
+        statusDot.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                selectTab(T_HOME);
+            }
+        });
         header.addView(statusDot);
         root.addView(header);
 
@@ -217,12 +228,20 @@ public class MainActivity extends Activity implements Hub.Listener {
             item.setOrientation(LinearLayout.VERTICAL);
             item.setGravity(Gravity.CENTER);
             item.setPadding(0, dp(4), 0, dp(2));
-            tabIcons[i] = text(TAB_ICONS[i], 18, MUTED, false);
-            tabIcons[i].setGravity(Gravity.CENTER);
+            // Material-style: icon in a pill that lights up when selected, label underneath
+            tabIconDrawables[i] = new Icons(TAB_ICONS[i], MUTED);
+            View icon = new View(this);
+            icon.setForeground(new android.graphics.drawable.InsetDrawable(tabIconDrawables[i], 0, dp(4), 0, dp(4)));
+            tabIcons[i] = icon;
             tabLabels[i] = text(TABS[i], 11, MUTED, false);
             tabLabels[i].setGravity(Gravity.CENTER);
-            item.addView(tabIcons[i]);
-            item.addView(tabLabels[i]);
+            tabLabels[i].setSingleLine(true);
+            item.addView(icon, new LinearLayout.LayoutParams(dp(56), dp(30)));
+            LinearLayout.LayoutParams tll = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            tll.topMargin = dp(2);
+            item.addView(tabLabels[i], tll);
+            item.setContentDescription(TABS[i] + " tab");
+            item.setMinimumHeight(dp(56));
             item.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
@@ -267,6 +286,7 @@ public class MainActivity extends Activity implements Hub.Listener {
             }
         });
         setContentView(root);
+        ripple(root);
         root.requestApplyInsets();
     }
 
@@ -275,9 +295,11 @@ public class MainActivity extends Activity implements Hub.Listener {
         tab = i;
         for (int k = 0; k < TABS.length; k++) {
             pageViews[k].setVisibility(k == i ? View.VISIBLE : View.GONE);
-            int col = k == i ? TEXT : MUTED;
-            tabLabels[k].setTextColor(col);
-            tabIcons[k].setTextColor(k == i ? ACCENT : MUTED);
+            boolean sel = k == i;
+            tabLabels[k].setTextColor(sel ? TEXT : MUTED);
+            tabLabels[k].setTypeface(Typeface.create(Typeface.DEFAULT, sel ? Typeface.BOLD : Typeface.NORMAL));
+            tabIconDrawables[k].setColor(sel ? Color.WHITE : MUTED);
+            tabIcons[k].setBackground(sel ? round((ACCENT & 0x00FFFFFF) | 0x55000000, dp(15), 0) : null);
         }
         onChange();
         update3dLifecycle();
@@ -289,8 +311,29 @@ public class MainActivity extends Activity implements Hub.Listener {
 
     // ---------------------------------------------------------------- Home
 
+    private LinearLayout setupCard;
+    private TextView setupText;
+    private Button setupButton;
+
     private View buildHome() {
         LinearLayout col = page();
+
+        // first run: one clear next step instead of a Start button that bounces you to another tab
+        setupCard = card(col);
+        setupCard.setBackground(round((ACCENT & 0x00FFFFFF) | 0x1F000000, dp(16), (ACCENT & 0x00FFFFFF) | 0x88000000));
+        setupCard.addView(text("Get started", 17, TEXT, true));
+        setupText = text("", 13, MUTED, false);
+        setupText.setPadding(0, dp(4), 0, 0);
+        setupCard.addView(setupText);
+        setupButton = smallButton("Sign in with Microsoft", ACCENT);
+        setupButton.setMinimumHeight(dp(48));
+        setupCard.addView(setupButton);
+        setupButton.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                selectTab(T_ACCOUNT);
+                if (signInThread == null && Auth.signedInName(MainActivity.this) == null) startSignIn();
+            }
+        });
 
         LinearLayout hero = card(col);
         statusText = text("Stopped", 22, TEXT, true);
@@ -356,6 +399,7 @@ public class MainActivity extends Activity implements Hub.Listener {
         t.addView(text(name, 12, MUTED, false));
         TextView v = text("-", 17, TEXT, true);
         v.setSingleLine(true);
+        v.setEllipsize(android.text.TextUtils.TruncateAt.END);
         t.addView(v);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
         lp.setMargins(dp(4), 0, dp(4), 0);
@@ -383,17 +427,17 @@ public class MainActivity extends Activity implements Hub.Listener {
         FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM | Gravity.END);
         blp.setMargins(0, 0, dp(10), dp(10));
         frame.addView(btns, blp);
-        mapButton(btns, "+", new Runnable() {
+        mapButton(btns, Icons.PLUS, "Zoom in", new Runnable() {
             public void run() {
                 radar.zoom(0.7f);
             }
         });
-        mapButton(btns, "−", new Runnable() {
+        mapButton(btns, Icons.MINUS, "Zoom out", new Runnable() {
             public void run() {
                 radar.zoom(1.43f);
             }
         });
-        mapButton(btns, "⌖", new Runnable() {
+        mapButton(btns, Icons.RECENTER, "Re-centre on you", new Runnable() {
             public void run() {
                 radar.recenter();
             }
@@ -425,13 +469,13 @@ public class MainActivity extends Activity implements Hub.Listener {
         surfaceChip = text("Surface", 13, TEXT, false);
         layerChip = text("Layer (Y level)", 13, TEXT, false);
         for (TextView t : new TextView[]{surfaceChip, layerChip}) {
-            t.setPadding(dp(12), dp(7), dp(12), dp(7));
+            t.setPadding(dp(14), dp(10), dp(14), dp(10));
             LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             clp.setMargins(0, 0, dp(6), 0);
             lh.addView(t, clp);
         }
         final TextView myY = text("My Y", 13, TEXT, false);
-        myY.setPadding(dp(12), dp(7), dp(12), dp(7));
+        myY.setPadding(dp(14), dp(10), dp(14), dp(10));
         myY.setBackground(round(SURFACE2, dp(20), STROKE));
         lh.addView(myY);
         layerLabel = text("", 13, MUTED, false);
@@ -528,11 +572,9 @@ public class MainActivity extends Activity implements Hub.Listener {
         return col;
     }
 
-    private void mapButton(LinearLayout parent, String label, final Runnable r) {
-        TextView b = text(label, 20, TEXT, true);
-        b.setGravity(Gravity.CENTER);
-        b.setBackground(round(0xCC141821, dp(12), STROKE));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(44), dp(44));
+    private void mapButton(LinearLayout parent, int icon, String description, final Runnable r) {
+        View b = iconButton(icon, description);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(48), dp(48));
         lp.topMargin = dp(8);
         parent.addView(b, lp);
         b.setOnClickListener(new View.OnClickListener() {
@@ -571,7 +613,7 @@ public class MainActivity extends Activity implements Hub.Listener {
     private int shownHotbar = -1;
     private TextView texChip;
     private View headerView, navView, card3d;
-    private TextView fsButton;
+    private View fsButton;
     private LinearLayout page3d;
     private boolean fullscreen;
 
@@ -585,7 +627,10 @@ public class MainActivity extends Activity implements Hub.Listener {
         page3d.setPadding(on ? 0 : dp(12), on ? 0 : dp(4), on ? 0 : dp(12), on ? 0 : dp(8));
         ((LinearLayout.LayoutParams) holder3d.getLayoutParams()).topMargin = on ? 0 : dp(10);
         holder3d.setBackground(on ? null : round(SURFACE, dp(16), STROKE));
-        if (fsButton != null) fsButton.setText(on ? "\u2715" : "\u26F6");
+        if (fsButton != null) {
+            setIcon(fsButton, on ? Icons.EXIT_FULLSCREEN : Icons.FULLSCREEN);
+            fsButton.setContentDescription(on ? "Exit full screen" : "Full screen");
+        }
         if (Build.VERSION.SDK_INT >= 30) {
             android.view.WindowInsetsController c = getWindow().getInsetsController();
             if (c != null) {
@@ -603,13 +648,17 @@ public class MainActivity extends Activity implements Hub.Listener {
         }
         getWindow().getDecorView().requestApplyInsets();
         holder3d.requestLayout();
-        if (on) toast("Full screen - tap \u2715 or press Back to exit. Rotate the phone for landscape.");
+        if (on) toast("Full screen - tap the corner button or press Back to exit. Rotate the phone for landscape.");
     }
 
     @Override
     public void onBackPressed() {
         if (fullscreen) {
             setFullscreen(false);
+            return;
+        }
+        if (tab != T_HOME) { // Back goes Home first, like other tabbed apps; Home + Back leaves (the bot keeps running)
+            selectTab(T_HOME);
             return;
         }
         super.onBackPressed();
@@ -636,7 +685,7 @@ public class MainActivity extends Activity implements Hub.Listener {
         LinearLayout modes = chipRow(c);
         final TextView fp = text("First person", 13, TEXT, false), orbit = text("Orbit", 13, TEXT, false);
         for (TextView t : new TextView[]{fp, orbit}) {
-            t.setPadding(dp(12), dp(7), dp(12), dp(7));
+            t.setPadding(dp(14), dp(10), dp(14), dp(10));
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             lp.setMargins(0, 0, dp(6), 0);
             modes.addView(t, lp);
@@ -664,7 +713,7 @@ public class MainActivity extends Activity implements Hub.Listener {
         for (int i = 0; i < 3; i++) {
             final int r = radii[i];
             final TextView t = text(r + "m", 13, TEXT, false);
-            t.setPadding(dp(12), dp(7), dp(12), dp(7));
+            t.setPadding(dp(14), dp(10), dp(14), dp(10));
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             lp.setMargins(0, 0, dp(6), 0);
             modes.addView(t, lp);
@@ -680,8 +729,8 @@ public class MainActivity extends Activity implements Hub.Listener {
         }
         card3d = c;
         LinearLayout acts = chipRow(c);
-        driveChip = text("✥ Drive", 13, TEXT, true);
-        driveChip.setPadding(dp(14), dp(8), dp(14), dp(8));
+        driveChip = text("Drive", 13, TEXT, true);
+        driveChip.setPadding(dp(18), dp(10), dp(18), dp(10));
         acts.addView(driveChip);
         styleChip(driveChip, GOOD, false);
         driveChip.setOnClickListener(new View.OnClickListener() {
@@ -737,7 +786,7 @@ public class MainActivity extends Activity implements Hub.Listener {
         targetBar.setBackground(round(0xDD0B0D12, dp(12), STROKE));
         targetText = text("", 13, TEXT, false);
         targetBar.addView(targetText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-        mineBtn = smallButton("\u26CF Mine", 0xFFB45309);
+        mineBtn = smallButton("Mine", 0xFFB45309);
         LinearLayout.LayoutParams mb = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38));
         mb.rightMargin = dp(6);
         mineBtn.setLayoutParams(mb);
@@ -747,7 +796,7 @@ public class MainActivity extends Activity implements Hub.Listener {
                 leftClick();
             }
         });
-        openBtn = smallButton("\u270B Use", ACCENT);
+        openBtn = smallButton("Use", ACCENT);
         LinearLayout.LayoutParams ob = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38));
         openBtn.setLayoutParams(ob);
         targetBar.addView(openBtn);
@@ -762,10 +811,8 @@ public class MainActivity extends Activity implements Hub.Listener {
         targetBar.setVisibility(View.GONE);
 
         // full screen toggle (top-right)
-        fsButton = text("\u26F6", 22, TEXT, true);
-        fsButton.setGravity(Gravity.CENTER);
-        fsButton.setBackground(round(0xCC141821, dp(12), STROKE));
-        FrameLayout.LayoutParams fl = new FrameLayout.LayoutParams(dp(46), dp(46), Gravity.TOP | Gravity.END);
+        fsButton = iconButton(Icons.FULLSCREEN, "Full screen");
+        FrameLayout.LayoutParams fl = new FrameLayout.LayoutParams(dp(48), dp(48), Gravity.TOP | Gravity.END);
         fl.setMargins(0, dp(8), dp(8), 0);
         holder3d.addView(fsButton, fl);
         fsButton.setOnClickListener(new View.OnClickListener() {
@@ -779,7 +826,7 @@ public class MainActivity extends Activity implements Hub.Listener {
         driveControls.setOrientation(LinearLayout.HORIZONTAL);
         driveControls.setGravity(Gravity.BOTTOM);
         JoystickView stick = new JoystickView(this);
-        driveControls.addView(stick, new LinearLayout.LayoutParams(dp(130), dp(130)));
+        driveControls.addView(stick, new LinearLayout.LayoutParams(dp(150), dp(150)));
         View spacer = new View(this);
         driveControls.addView(spacer, new LinearLayout.LayoutParams(0, 1, 1));
         LinearLayout btns = new LinearLayout(this);
@@ -804,7 +851,7 @@ public class MainActivity extends Activity implements Hub.Listener {
         }, true));
         driveControls.addView(btns);
         FrameLayout.LayoutParams dl = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM);
-        dl.setMargins(dp(10), 0, dp(10), dp(62));
+        dl.setMargins(dp(10), 0, dp(10), dp(64));
         hotbar = new LinearLayout(this);
         hotbar.setOrientation(LinearLayout.HORIZONTAL);
         hotbar.setGravity(Gravity.CENTER);
@@ -857,12 +904,13 @@ public class MainActivity extends Activity implements Hub.Listener {
         final TextView b = text(label, 13, TEXT, true);
         b.setGravity(Gravity.CENTER);
         b.setBackground(round(0xCC141821, dp(14), STROKE));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(76), dp(44));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(84), dp(52)); // thumb-sized
         lp.topMargin = dp(8);
         b.setLayoutParams(lp);
         final boolean[] on = {false};
         b.setOnTouchListener(new View.OnTouchListener() {
             public boolean onTouch(View v, MotionEvent e) {
+                if (e.getActionMasked() == MotionEvent.ACTION_DOWN) haptic(b);
                 if (toggle) {
                     if (e.getActionMasked() == MotionEvent.ACTION_DOWN) {
                         on[0] = !on[0];
@@ -903,6 +951,9 @@ public class MainActivity extends Activity implements Hub.Listener {
         if (on && !World.inWorld) toast("Start AFK first");
         if (driveControls != null) driveControls.setVisibility(on && view3d != null ? View.VISIBLE : View.GONE);
         if (view3d != null) view3d.setContinuous(on);
+        // don't let the screen time out while you're steering
+        if (on) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         if (on && !was) Hub.log("Drive mode on - anti-AFK pauses while you control the player");
     }
 
@@ -942,7 +993,7 @@ public class MainActivity extends Activity implements Hub.Listener {
             TextView t = text(it.name + "  ×" + it.count + (it.detail.isEmpty() ? "" : "\n" + it.detail), 13, TEXT, false);
             r.addView(t, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
             Button take = smallButton("Take", SURFACE2);
-            take.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(34)));
+            take.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(40)));
             r.addView(take);
             take.setOnClickListener(new View.OnClickListener() {
                 public void onClick(View v) {
@@ -952,6 +1003,7 @@ public class MainActivity extends Activity implements Hub.Listener {
             });
         }
         if (shown == 0) containerList.addView(text(s.isEmpty() ? "Loading..." : "Empty.", 13, MUTED, false));
+        ripple(containerList);
     }
 
     private void showInventory() {
@@ -1031,6 +1083,7 @@ public class MainActivity extends Activity implements Hub.Listener {
                 pb.inJump = false;
                 pb.manual = false; // paused while the 3D view isn't open; resumes when you come back
             }
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); // back on when you return and drive
         }
         overlay.crosshair = view3d != null && firstPerson3d;
         boolean showInfo = view3d == null || !World.inWorld;
@@ -1055,7 +1108,7 @@ public class MainActivity extends Activity implements Hub.Listener {
             targetEntity = e;
             String kind = e.kind == 'p' ? "player" : e.kind == 'h' ? "hostile" : e.kind == 'a' ? "animal" : "entity";
             targetText.setText(String.format(Locale.US, "%s (%s)  \u2022  %.1f m%s", e.label, kind, e.dist, e.dist > 3.5 ? "  (too far)" : ""));
-            mineBtn.setText("\u2694 Hit");
+            mineBtn.setText("Hit");
             mineBtn.setVisibility(b != null ? View.VISIBLE : View.GONE);
             openBtn.setVisibility(b != null ? View.VISIBLE : View.GONE);
             mineBtn.setAlpha(e.dist <= 3.5 ? 1f : 0.45f);
@@ -1071,7 +1124,7 @@ public class MainActivity extends Activity implements Hub.Listener {
         float prog = Bot.miningProgress;
         String extra = b != null && b.isMining() && prog >= 0 ? String.format(Locale.US, "  \u2022  mining %d%%", Math.round(prog * 100)) : r > 4.5 ? "  (too far)" : "";
         targetText.setText(String.format(Locale.US, "%s  \u2022  %d, %d, %d  \u2022  %.1f m%s", name, t[0], t[1], t[2], r, extra));
-        mineBtn.setText(b != null && b.isMining() ? "\u25A0 Stop" : "\u26CF Mine");
+        mineBtn.setText(b != null && b.isMining() ? "Stop" : "Mine");
         mineBtn.setVisibility(b != null && b.containersSupported() ? View.VISIBLE : View.GONE);
         openBtn.setVisibility(b != null && b.containersSupported() ? View.VISIBLE : View.GONE);
         mineBtn.setAlpha(r <= 4.5 ? 1f : 0.45f);
@@ -1088,14 +1141,31 @@ public class MainActivity extends Activity implements Hub.Listener {
             toast(b.attack(e));
             return;
         }
-        int[] t = target;
+        final int[] t = target;
         if (t == null) return;
         if (b.isMining()) {
             b.stopMining(true);
             toast("Stopped mining");
-        } else {
-            toast(b.startMining(t));
+            updateTarget();
+            return;
         }
+        int st = MapData.stateAt(t[0], t[1], t[2]);
+        ProtoDef.VersionData vd = Hub.versionData;
+        String name = vd != null && st > 0 ? vd.blockName(st) : "";
+        String low = name.toLowerCase(Locale.US);
+        // one stray tap on a phone shouldn't spill a chest or break a bed/spawner: ask first for those
+        if (Bot.isContainer(name) || low.contains("shulker") || low.endsWith(" bed") || low.contains("spawner")
+                || low.contains("beacon") || low.contains("enchanting") || low.contains("anvil") || low.contains("end portal")) {
+            confirm("Break " + name + "?", Bot.isContainer(name) || low.contains("shulker") ? "Its contents will drop on the ground." : "This can't be undone.", "Break it", new Runnable() {
+                public void run() {
+                    Bot bb = Hub.bot;
+                    if (bb != null) toast(bb.startMining(t));
+                    updateTarget();
+                }
+            });
+            return;
+        }
+        toast(b.startMining(t));
         updateTarget();
     }
 
@@ -1158,9 +1228,7 @@ public class MainActivity extends Activity implements Hub.Listener {
                 }
             });
         }
-        TextView use = text("\u270B", 18, TEXT, true);
-        use.setGravity(Gravity.CENTER);
-        use.setBackground(round(0xCC8B5CF6, dp(8), ACCENT));
+        View use = iconButton(Icons.HAND, "Use the item in your hand");
         LinearLayout.LayoutParams ul = new LinearLayout.LayoutParams(dp(44), ViewGroup.LayoutParams.MATCH_PARENT);
         ul.setMargins(dp(4), 0, 0, 0);
         hotbar.addView(use, ul);
@@ -1173,6 +1241,7 @@ public class MainActivity extends Activity implements Hub.Listener {
                 toast(held != null ? "Used " + held.name : "Nothing in your hand");
             }
         });
+        ripple(hotbar);
     }
 
     private static String shortName(String n) {
@@ -1378,8 +1447,8 @@ public class MainActivity extends Activity implements Hub.Listener {
     }
 
     private void legendChip(LinearLayout parent, String name, final int color, final int which) {
-        final TextView chip = text("● " + name, 12, TEXT, false);
-        chip.setPadding(dp(10), dp(6), dp(10), dp(6));
+        final TextView chip = text("\u25CF " + name, 12, TEXT, false);
+        chip.setPadding(dp(12), dp(9), dp(12), dp(9));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.setMargins(0, 0, dp(6), 0);
         parent.addView(chip, lp);
@@ -1462,8 +1531,8 @@ public class MainActivity extends Activity implements Hub.Listener {
         });
         afk.addView(label("Every (seconds)"));
         afk.addView(numberField(String.valueOf(cfg.afkSeconds), new IntSetter() {
-            public void set(int v) {
-                cfg.afkSeconds = Math.max(2, v);
+            public int set(int v) {
+                return cfg.afkSeconds = Math.max(2, v);
             }
         }));
         LinearLayout opts = chipRow(afk);
@@ -1501,20 +1570,20 @@ public class MainActivity extends Activity implements Hub.Listener {
         });
         log.addView(label("Log out below (hearts, 0 = off)"));
         log.addView(numberField(String.valueOf(cfg.logHearts), new IntSetter() {
-            public void set(int v) {
-                cfg.logHearts = Math.max(0, Math.min(10, v));
+            public int set(int v) {
+                return cfg.logHearts = Math.max(0, Math.min(10, v));
             }
         }));
         log.addView(label("Log out if a player is within (blocks, 0 = off)"));
         log.addView(numberField(String.valueOf(cfg.logDistance), new IntSetter() {
-            public void set(int v) {
-                cfg.logDistance = Math.max(0, Math.min(256, v));
+            public int set(int v) {
+                return cfg.logDistance = Math.max(0, Math.min(256, v));
             }
         }));
         log.addView(label("Rejoin after (minutes, 0 = stay offline)"));
         log.addView(numberField(String.valueOf(cfg.rejoinMinutes), new IntSetter() {
-            public void set(int v) {
-                cfg.rejoinMinutes = Math.max(0, Math.min(1440, v));
+            public int set(int v) {
+                return cfg.rejoinMinutes = Math.max(0, Math.min(1440, v));
             }
         }));
         LinearLayout lo = chipRow(log);
@@ -1614,7 +1683,7 @@ public class MainActivity extends Activity implements Hub.Listener {
 
     private void actionChip(LinearLayout parent, String name, final Runnable r) {
         TextView t = text(name, 13, TEXT, true);
-        t.setPadding(dp(14), dp(8), dp(14), dp(8));
+        t.setPadding(dp(16), dp(10), dp(16), dp(10));
         t.setBackground(round(SURFACE2, dp(20), ACCENT));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.setMargins(0, 0, dp(8), 0);
@@ -1624,6 +1693,14 @@ public class MainActivity extends Activity implements Hub.Listener {
                 r.run();
             }
         });
+    }
+
+    /** Like actionChip, but red: for actions that destroy something. */
+    private void dangerChip(LinearLayout parent, String name, final Runnable r) {
+        actionChip(parent, name, r);
+        TextView t = (TextView) parent.getChildAt(parent.getChildCount() - 1);
+        t.setTextColor(BAD);
+        t.setBackground(round((BAD & 0x00FFFFFF) | 0x1A000000, dp(20), (BAD & 0x00FFFFFF) | 0x99000000));
     }
 
     private void refreshMods() {
@@ -1689,14 +1766,19 @@ public class MainActivity extends Activity implements Hub.Listener {
             });
             actionChip(acts, "Reset data", new Runnable() {
                 public void run() {
-                    ModStore.clearData(MainActivity.this, m.id);
-                    toast("Saved data cleared");
+                    confirm("Reset " + m.name + "'s data?", "Clears everything this mod has saved. The mod itself stays installed.", "Reset", new Runnable() {
+                        public void run() {
+                            ModStore.clearData(MainActivity.this, m.id);
+                            toast("Saved data cleared");
+                        }
+                    });
                 }
             });
-            actionChip(acts, "Delete", new Runnable() {
+            dangerChip(acts, "Delete", new Runnable() {
                 public void run() {
                     new android.app.AlertDialog.Builder(MainActivity.this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
                             .setTitle("Delete " + m.name + "?")
+                            .setMessage("Removes the mod and its saved data from this phone.")
                             .setPositiveButton("Delete", new android.content.DialogInterface.OnClickListener() {
                                 public void onClick(android.content.DialogInterface d, int w) {
                                     ModStore.delete(MainActivity.this, m.id);
@@ -1708,6 +1790,7 @@ public class MainActivity extends Activity implements Hub.Listener {
                 }
             });
         }
+        ripple(modsList);
     }
 
     private void refreshModsSoon() {
@@ -1968,6 +2051,7 @@ public class MainActivity extends Activity implements Hub.Listener {
                 }
             });
         }
+        ripple(storageList);
     }
 
     private LinearLayout usableList;
@@ -2034,6 +2118,7 @@ public class MainActivity extends Activity implements Hub.Listener {
                 }
             });
         }
+        ripple(usableList);
     }
 
     /** Uses a block: opens containers, toggles doors/levers, presses buttons (from Home, Map or 3D). */
@@ -2144,6 +2229,7 @@ public class MainActivity extends Activity implements Hub.Listener {
             });
         }
         if (shown == 0) dialogList.addView(text(s.isEmpty() ? "Loading contents..." : "This container is empty.", 13, MUTED, false));
+        ripple(dialogList);
     }
 
     interface Toggle {
@@ -2151,7 +2237,8 @@ public class MainActivity extends Activity implements Hub.Listener {
     }
 
     interface IntSetter {
-        void set(int v);
+        /** Applies the typed value and returns what was actually stored (after clamping). */
+        int set(int v);
     }
 
     private LinearLayout module(LinearLayout parent, String name, String desc, boolean on, final Toggle t) {
@@ -2168,7 +2255,11 @@ public class MainActivity extends Activity implements Hub.Listener {
         sw.setThumbTintList(new ColorStateList(states, new int[]{Color.WHITE, 0xFFB4BCD0}));
         sw.setTrackTintList(new ColorStateList(states, new int[]{ACCENT, STROKE}));
         head.addView(sw);
-        c.setAlpha(1f);
+        head.setOnClickListener(new View.OnClickListener() { // the whole title row is a big target for the switch
+            public void onClick(View v) {
+                sw.toggle();
+            }
+        });
         sw.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
             @Override
             public void onCheckedChanged(android.widget.CompoundButton b, boolean v) {
@@ -2186,7 +2277,7 @@ public class MainActivity extends Activity implements Hub.Listener {
 
     private void optionChip(LinearLayout parent, String name, boolean on, final Toggle t) {
         final TextView chip = text(name, 13, TEXT, false);
-        chip.setPadding(dp(12), dp(7), dp(12), dp(7));
+        chip.setPadding(dp(14), dp(10), dp(14), dp(10));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.setMargins(0, 0, dp(6), 0);
         parent.addView(chip, lp);
@@ -2204,16 +2295,28 @@ public class MainActivity extends Activity implements Hub.Listener {
     }
 
     private EditText numberField(String value, final IntSetter s) {
-        EditText e = edit("", InputType.TYPE_CLASS_NUMBER);
+        final EditText e = edit("", InputType.TYPE_CLASS_NUMBER);
         e.setText(value);
+        e.setImeOptions(EditorInfo.IME_ACTION_DONE);
+        final int[] applied = {0};
+        try {
+            applied[0] = Integer.parseInt(value);
+        } catch (NumberFormatException ignored) {
+        }
         e.addTextChangedListener(new SimpleWatcher() {
             @Override
             public void afterTextChanged(Editable ed) {
                 try {
-                    s.set(Integer.parseInt(ed.toString().trim()));
+                    applied[0] = s.set(Integer.parseInt(ed.toString().trim()));
                     save();
                 } catch (NumberFormatException ignored) {
                 }
+            }
+        });
+        // when you leave the field, show the value that's really used (e.g. 1 second becomes the minimum of 2)
+        e.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+            public void onFocusChange(View v, boolean has) {
+                if (!has && !String.valueOf(applied[0]).equals(e.getText().toString().trim())) e.setText(String.valueOf(applied[0]));
             }
         });
         return e;
@@ -2248,6 +2351,10 @@ public class MainActivity extends Activity implements Hub.Listener {
         cc.addView(chatScroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
         col.addView(cc, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
 
+        // what you sent recently: tap to put it back in the box (not sent until you press Send)
+        recentChat = chipRow(col);
+        ((View) recentChat.getParent()).setVisibility(View.GONE);
+
         LinearLayout input = new LinearLayout(this);
         input.setOrientation(LinearLayout.HORIZONTAL);
         input.setGravity(Gravity.CENTER_VERTICAL);
@@ -2263,6 +2370,7 @@ public class MainActivity extends Activity implements Hub.Listener {
         });
         input.addView(chatInput, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         Button send = smallButton("Send", ACCENT);
+        send.setMinimumHeight(dp(48));
         send.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -2287,6 +2395,33 @@ public class MainActivity extends Activity implements Hub.Listener {
         }
         b.sendChat(t);
         chatInput.setText("");
+        sentChat.remove(t);
+        sentChat.add(0, t);
+        while (sentChat.size() > 6) sentChat.remove(sentChat.size() - 1);
+        refreshRecentChat();
+    }
+
+    private LinearLayout recentChat;
+    private final java.util.ArrayList<String> sentChat = new java.util.ArrayList<String>();
+
+    private void refreshRecentChat() {
+        recentChat.removeAllViews();
+        ((View) recentChat.getParent()).setVisibility(sentChat.isEmpty() ? View.GONE : View.VISIBLE);
+        for (final String m : sentChat) {
+            actionChip(recentChat, trim(m, 24), new Runnable() {
+                public void run() {
+                    chatInput.setText(m);
+                    chatInput.setSelection(m.length());
+                    chatInput.requestFocus();
+                }
+            });
+        }
+        ripple(recentChat);
+    }
+
+    /** True if a scroll view is showing (nearly) the end of its content, so new lines should keep it there. */
+    private boolean atBottom(ScrollView sv, View content) {
+        return content.getHeight() == 0 || sv.getScrollY() + sv.getHeight() >= content.getHeight() - dp(60);
     }
 
     // ---------------------------------------------------------------- Account / settings
@@ -2299,12 +2434,29 @@ public class MainActivity extends Activity implements Hub.Listener {
         account = text("", 14, TEXT, false);
         account.setPadding(0, dp(4), 0, 0);
         ac.addView(account);
-        codeBox = text("", 14, TEXT, false);
-        codeBox.setPadding(dp(12), dp(10), dp(12), dp(10));
-        codeBox.setBackground(round(SURFACE2, dp(12), ACCENT));
+        codeBig = text("", 30, Color.WHITE, true);
+        codeBig.setTypeface(Typeface.create(Typeface.MONOSPACE, Typeface.BOLD));
+        codeBig.setLetterSpacing(0.12f);
+        codeBig.setGravity(Gravity.CENTER);
+        codeBig.setPadding(dp(12), dp(14), dp(12), dp(4));
+        codeBig.setContentDescription("Sign-in code, tap to copy");
+        codeBox = text("", 13, MUTED, false);
+        codeBox.setGravity(Gravity.CENTER);
+        codeBox.setPadding(dp(12), 0, dp(12), dp(12));
+        LinearLayout codeCard = new LinearLayout(this);
+        codeCard.setOrientation(LinearLayout.VERTICAL);
+        codeCard.setBackground(round(SURFACE2, dp(12), ACCENT));
+        codeCard.addView(codeBig);
+        codeCard.addView(codeBox);
         LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         clp.topMargin = dp(10);
-        ac.addView(codeBox, clp);
+        ac.addView(codeCard, clp);
+        codeView = codeCard;
+        codeCard.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                copyCode.performClick();
+            }
+        });
         LinearLayout codeRow = row(ac);
         openLink = smallButton("Open microsoft.com/link", ACCENT);
         copyCode = smallButton("Copy code", SURFACE2);
@@ -2345,9 +2497,13 @@ public class MainActivity extends Activity implements Hub.Listener {
         signOut.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                Auth.signOut(MainActivity.this);
-                Hub.log("Signed out");
-                onChange();
+                confirm("Sign out?", "You'll need a new code from microsoft.com/link to sign in again." + (Hub.running ? " The bot keeps its current connection until you stop it." : ""), "Sign out", new Runnable() {
+                    public void run() {
+                        Auth.signOut(MainActivity.this);
+                        Hub.log("Signed out");
+                        onChange();
+                    }
+                });
             }
         });
 
@@ -2432,13 +2588,21 @@ public class MainActivity extends Activity implements Hub.Listener {
     public void onChange() {
         boolean running = Hub.running;
         int sc = Hub.color == Hub.GREEN ? GOOD : Hub.color == Hub.RED ? BAD : Hub.color == Hub.YELLOW ? WARN : MUTED;
-        statusDot.setTextColor(sc);
+        statusDot.setTextColor(sc == MUTED ? MUTED : sc);
+        String word = Hub.color == Hub.GREEN ? "Online" : Hub.color == Hub.YELLOW ? "Connecting" : Hub.color == Hub.RED ? (running ? "Problem" : "Offline") : running ? "Starting" : "Stopped";
+        statusDot.setText("\u25CF  " + word);
+        statusDot.setBackground(round(sc == MUTED ? SURFACE2 : (sc & 0x00FFFFFF) | 0x1F000000, dp(20), sc == MUTED ? STROKE : (sc & 0x00FFFFFF) | 0x66000000));
         if (tab == 0) {
             statusText.setText(Hub.status);
             statusText.setTextColor(sc == MUTED ? TEXT : sc);
             String name = Auth.signedInName(this);
             statusSub.setText((cfg.offline ? cfg.offlineName : name != null ? name : "Not signed in") + "  •  " + cfg.address);
             startStop.setText(running ? "Stop" : "Start AFK");
+            boolean needSignIn = !cfg.offline && name == null;
+            setupCard.setVisibility(needSignIn && !running ? View.VISIBLE : View.GONE);
+            if (needSignIn) setupText.setText(signInThread != null ? "Sign-in is in progress - finish it on the Account tab." :
+                    "Sign in with the Microsoft account that owns Minecraft. You'll get a short code to enter at microsoft.com/link - no password is typed into this app.");
+            if (needSignIn) setupButton.setText(signInThread != null ? "Show my code" : "Sign in with Microsoft");
             startStop.setBackground(running ? round(0xFF3A1D24, dp(14), BAD) : gradient(ACCENT, ACCENT2, dp(14)));
             boolean live = running && World.inWorld;
             float hp = Hub.statHealth;
@@ -2459,8 +2623,9 @@ public class MainActivity extends Activity implements Hub.Listener {
             if (v != shownChat) {
                 shownChat = v;
                 String t = Hub.chatText();
+                boolean follow = atBottom(chatScroll, chatText); // don't yank you down while you're reading older chat
                 chatText.setText(t.isEmpty() ? "Chat from the server shows up here." : t);
-                chatScroll.post(new Runnable() {
+                if (follow) chatScroll.post(new Runnable() {
                     @Override
                     public void run() {
                         chatScroll.fullScroll(View.FOCUS_DOWN);
@@ -2493,19 +2658,21 @@ public class MainActivity extends Activity implements Hub.Listener {
         signOut.setVisibility(name != null && !signing ? View.VISIBLE : View.GONE);
         String code = Hub.authCode;
         boolean showCode = signing && code != null;
-        codeBox.setVisibility(showCode ? View.VISIBLE : View.GONE);
+        codeView.setVisibility(showCode ? View.VISIBLE : View.GONE);
         openLink.setVisibility(showCode ? View.VISIBLE : View.GONE);
         copyCode.setVisibility(showCode ? View.VISIBLE : View.GONE);
         if (showCode) {
-            codeBox.setText("Your code:  " + code + "\n\n1. Tap \"Open microsoft.com/link\" and enter the code\n2. Sign in with the account that owns Minecraft\n3. Come back to this app - it finishes by itself");
+            codeBig.setText(code);
+            codeBox.setText("Tap the code to copy it\n\n1. Tap \"Open microsoft.com/link\" (the code is filled in for you)\n2. Sign in with the account that owns Minecraft\n3. Come back here - it finishes by itself");
         }
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
         battery.setVisibility(pm.isIgnoringBatteryOptimizations(getPackageName()) ? View.GONE : View.VISIBLE);
         String l = Hub.logText();
         if (!l.equals(lastLog)) {
             lastLog = l;
+            boolean follow = atBottom(logScroll, fullLog);
             fullLog.setText(l);
-            logScroll.post(new Runnable() {
+            if (follow) logScroll.post(new Runnable() {
                 @Override
                 public void run() {
                     logScroll.fullScroll(View.FOCUS_DOWN);
@@ -2518,9 +2685,18 @@ public class MainActivity extends Activity implements Hub.Listener {
 
     private void toggle() {
         if (Hub.running) {
-            startService(new Intent(this, AfkService.class).setAction(AfkService.ACTION_STOP));
+            if (!World.inWorld) { // still connecting: stopping loses nothing
+                stopBot();
+                return;
+            }
+            confirm("Stop AFK?", "You'll leave " + cfg.address + ". On busy servers you may have to queue again to get back in.", "Stop", new Runnable() {
+                public void run() {
+                    stopBot();
+                }
+            });
             return;
         }
+        haptic(startStop);
         save();
         if (cfg.address.trim().isEmpty()) {
             toast("Enter the server address in Account first");
@@ -2535,6 +2711,28 @@ public class MainActivity extends Activity implements Hub.Listener {
         Hub.running = true;
         Hub.status("Starting...", Hub.YELLOW);
         startForegroundService(new Intent(this, AfkService.class).setAction(AfkService.ACTION_START));
+    }
+
+    private void stopBot() {
+        haptic(startStop);
+        startService(new Intent(this, AfkService.class).setAction(AfkService.ACTION_STOP));
+    }
+
+    private void confirm(String title, String message, String ok, final Runnable r) {
+        new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle(title)
+                .setMessage(message)
+                .setPositiveButton(ok, new android.content.DialogInterface.OnClickListener() {
+                    public void onClick(android.content.DialogInterface d, int w) {
+                        r.run();
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private static void haptic(View v) {
+        if (v != null) v.performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY);
     }
 
     private void startSignIn() {
@@ -2656,6 +2854,43 @@ public class MainActivity extends Activity implements Hub.Listener {
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         lp.setMargins(0, 0, dp(6), 0);
         return lp;
+    }
+
+    /**
+     * Gives every tappable view in a tree a ripple (our flat custom backgrounds otherwise give no feedback at all when
+     * pressed). Safe to call again after rebuilding a list: views that already have one are skipped.
+     */
+    private void ripple(View v) {
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) ripple(g.getChildAt(i));
+        }
+        if (!v.isClickable() || v instanceof EditText || v instanceof android.widget.CompoundButton) return;
+        if (!(v instanceof TextView) && v.getClass() != LinearLayout.class && v.getClass() != FrameLayout.class && v.getClass() != View.class) return;
+        if (v.getForeground() instanceof android.graphics.drawable.RippleDrawable) return;
+        android.graphics.drawable.Drawable bgd = v.getBackground();
+        if (bgd instanceof android.graphics.drawable.LayerDrawable && ((android.graphics.drawable.LayerDrawable) bgd).getNumberOfLayers() > 0)
+            bgd = ((android.graphics.drawable.LayerDrawable) bgd).getDrawable(0);
+        float r = bgd instanceof GradientDrawable ? ((GradientDrawable) bgd).getCornerRadius() : dp(12);
+        GradientDrawable mask = new GradientDrawable();
+        mask.setColor(Color.WHITE);
+        mask.setCornerRadius(r);
+        v.setForeground(new android.graphics.drawable.RippleDrawable(ColorStateList.valueOf(0x40FFFFFF), null, mask));
+    }
+
+    /** A square button showing a drawn icon on a translucent rounded background (the ripple goes on top). */
+    private View iconButton(int icon, String description) {
+        View b = new View(this);
+        setIcon(b, icon);
+        b.setContentDescription(description);
+        b.setClickable(true);
+        return b;
+    }
+
+    private void setIcon(View b, int icon) {
+        int in = dp(12);
+        b.setBackground(new android.graphics.drawable.LayerDrawable(new android.graphics.drawable.Drawable[]{
+                round(0xCC141821, dp(12), STROKE), new android.graphics.drawable.InsetDrawable(new Icons(icon, TEXT), in)}));
     }
 
     static GradientDrawable round(int fill, int radius, int stroke) {

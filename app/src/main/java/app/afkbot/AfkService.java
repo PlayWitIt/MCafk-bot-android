@@ -175,6 +175,12 @@ public class AfkService extends Service {
         nm.notify(NOTIF_ID, buildNotification(text));
     }
 
+    /** Our own status bar icon (res/drawable/ic_stat_afk.xml), or the system one if it's somehow missing. */
+    private int statIcon() {
+        int id = getResources().getIdentifier("ic_stat_afk", "drawable", getPackageName());
+        return id != 0 ? id : android.R.drawable.ic_media_play;
+    }
+
     private Notification buildNotification(String text) {
         NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         if (nm.getNotificationChannel(CHANNEL) == null) {
@@ -188,7 +194,8 @@ public class AfkService extends Service {
         Intent stop = new Intent(this, AfkService.class).setAction(ACTION_STOP);
         PendingIntent stopPi = PendingIntent.getService(this, 1, stop, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         return new Notification.Builder(this, CHANNEL)
-                .setSmallIcon(android.R.drawable.ic_media_play)
+                .setSmallIcon(statIcon())
+                .setColor(MainActivity.ACCENT)
                 .setContentTitle("AFK Bot")
                 .setContentText(text)
                 .setOngoing(true)
