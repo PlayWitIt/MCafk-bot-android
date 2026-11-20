@@ -245,6 +245,8 @@ final class Bot {
                 minWait = 120;
             } catch (Kick k) {
                 Hub.log("Kicked: " + k.getMessage());
+                String rs = recentSent();
+                if (!rs.isEmpty()) Hub.log("Last things sent before the kick: " + rs);
                 String km = String.valueOf(k.getMessage()).toLowerCase(Locale.US);
                 if (km.contains("wait") || km.contains("too fast") || km.contains("throttl")) minWait = 60;
                 Hub.status("Kicked: " + firstLine(k.getMessage()), Hub.RED);
@@ -255,6 +257,8 @@ final class Bot {
                     String m = e instanceof SocketTimeoutException ? "server stopped responding (timed out)"
                             : e instanceof EOFException ? "server closed the connection" : String.valueOf(e.getMessage());
                     Hub.log("Disconnected: " + m);
+                    String rs = recentSent();
+                    if (!rs.isEmpty()) Hub.log("Last things sent before the disconnect: " + rs);
                     Hub.status("Disconnected", Hub.RED);
                     if (joinedAt > 0) Hub.alert("Disconnected from " + serverLabel, m + (cfg.autoReconnect ? " - reconnecting" : ""));
                     emitMod("leave", "reason", m);
@@ -994,6 +998,7 @@ final class Bot {
                 Inv.inventory = list;
             } else if (wid == Inv.openId) {
                 Inv.slots = list;
+                mirrorPlayerSlots(list);
                 Hub.log("Container contents: " + countItems(list.subList(0, Math.max(0, list.size() - 36))) + " stacks");
             }
             Inv.version++;
@@ -1012,7 +1017,10 @@ final class Bot {
                 java.util.List<Inv.Item> copy = new java.util.ArrayList<Inv.Item>(target);
                 copy.set(slot, Inv.fromSlot(m.get("item"), vdata));
                 if (wid == 0) Inv.inventory = copy;
-                else Inv.slots = copy;
+                else {
+                    Inv.slots = copy;
+                    mirrorPlayerSlots(copy);
+                }
                 Inv.version++;
             }
         } else if (pid == id(Proto.P_C_HELD_SLOT)) {
@@ -1097,6 +1105,39 @@ final class Bot {
     }
 
     /** Face of the block that points towards the player (what a real click would hit). */
+    /**
+     * The face to click and the point on it, {face, cx, cy, cz} in block-local coordinates: the centre of that
+     * face of the block's real outline. If the requested face can't be seen from the eye, the visible face
+     * closest to the line of sight is used instead.
+     */
+    static float[] facePoint(int bx, int by, int bz, int face, double ex, double ey, double ez) {
+        float[][] boxes = Shapes.outline(MapData.stateAt(bx, by, bz));
+        float x0 = 1, y0 = 1, z0 = 1, x1 = 0, y1 = 0, z1 = 0;
+        for (float[] q : boxes) {
+            x0 = Math.min(x0, q[0]); y0 = Math.min(y0, q[1]); z0 = Math.min(z0, q[2]);
+            x1 = Math.max(x1, q[3]); y1 = Math.max(y1, q[4]); z1 = Math.max(z1, q[5]);
+        }
+        if (x1 <= x0 || y1 <= y0 || z1 <= z0) { x0 = y0 = z0 = 0; x1 = y1 = z1 = 1; }
+        double lx = ex - bx, ly = ey - by, lz = ez - bz; // eye in block-local coordinates
+        boolean[] vis = {ly < y0, ly > y1, lz < z0, lz > z1, lx < x0, lx > x1};
+        if (face < 0 || face > 5 || !vis[face]) {
+            double cx = (x0 + x1) / 2 - lx, cy = (y0 + y1) / 2 - ly, cz = (z0 + z1) / 2 - lz; // eye -> centre
+            double[] score = {cy, -cy, cz, -cz, cx, -cx}; // face normals: down, up, north, south, west, east
+            int best = -1;
+            for (int f = 0; f < 6; f++) if (vis[f] && (best < 0 || score[f] > score[best])) best = f;
+            face = best < 0 ? 1 : best;
+        }
+        float mx = (x0 + x1) / 2, my = (y0 + y1) / 2, mz = (z0 + z1) / 2;
+        switch (face) {
+            case 0: return new float[]{0, mx, y0, mz};
+            case 1: return new float[]{1, mx, y1, mz};
+            case 2: return new float[]{2, mx, my, z0};
+            case 3: return new float[]{3, mx, my, z1};
+            case 4: return new float[]{4, x0, my, mz};
+            default: return new float[]{5, x1, my, mz};
+        }
+    }
+
     static int faceToward(int[] b) {
         double dx = World.selfX - (b[0] + 0.5), dy = World.selfY + 1.62 - (b[1] + 0.5), dz = World.selfZ - (b[2] + 0.5);
         double ax = Math.abs(dx), ay = Math.abs(dy), az = Math.abs(dz);
@@ -1135,18 +1176,21 @@ final class Bot {
             @Override
             public void run() {
                 try {
-                    // look at the block first, like a real client
+                    // Like a real client: aim at a point on a face we can actually see, and report that exact
+                    // point (anticheats drop clients whose click point is inside the block or on a hidden face).
+                    float[] hit;
                     synchronized (Bot.this) {
+                        hit = facePoint(bx, by, bz, face, x, y + 1.62, z);
                         double ex = x, ey = y + 1.62, ez = z;
-                        double dx = bx + 0.5 - ex, dy = by + 0.5 - ey, dz = bz + 0.5 - ez;
+                        double dx = bx + hit[1] - ex, dy = by + hit[2] - ey, dz = bz + hit[3] - ez;
                         yaw = (float) Math.toDegrees(Math.atan2(-dx, dz));
                         pitch = (float) -Math.toDegrees(Math.atan2(dy, Math.sqrt(dx * dx + dz * dz)));
                         lookYaw = yaw;
                         lookPitch = pitch;
                     }
                     sendMove(true, true, onGroundM);
-                    Buf b = new Buf(id(Proto.P_S_USE_ITEM_ON)).varInt(0).i64(packPos(bx, by, bz)).varInt(face)
-                            .f32(0.5f).f32(face == 1 ? 1f : 0.5f).f32(0.5f).bool(false);
+                    Buf b = new Buf(id(Proto.P_S_USE_ITEM_ON)).varInt(0).i64(packPos(bx, by, bz)).varInt((int) hit[0])
+                            .f32(hit[1]).f32(hit[2]).f32(hit[3]).bool(false);
                     if (proto >= 768) b.bool(false);
                     b.varInt(++useSequence);
                     send(b);
@@ -1157,6 +1201,15 @@ final class Bot {
                 }
             }
         });
+    }
+
+    /** An open container's last 36 slots are your inventory (27 main + 9 hotbar): keep window 0 in step, like a real client. */
+    private static void mirrorPlayerSlots(java.util.List<Inv.Item> win) {
+        java.util.List<Inv.Item> inv = Inv.inventory;
+        if (win.size() < 36 || inv.size() < 45) return;
+        java.util.List<Inv.Item> copy = new java.util.ArrayList<Inv.Item>(inv);
+        for (int k = 0; k < 36; k++) copy.set(9 + k, win.get(win.size() - 36 + k));
+        Inv.inventory = copy;
     }
 
     /** Clicks a slot in the open container. mode 1 + button 0 = shift-click (moves the stack across). */
@@ -2143,8 +2196,51 @@ final class Bot {
     // Framing, compression, encryption
     // ===================================================================================
 
+    // last packets we sent, so an unexplained disconnect can say what we were doing
+    private final int[] sentIds = new int[48];
+    private int sentPos;
+    private final Object sentLock = new Object();
+
+    private static final int[] SENT_KEYS = {Proto.P_S_USE_ITEM_ON, Proto.P_S_WINDOW_CLICK, Proto.P_S_CLOSE_WINDOW,
+            Proto.P_S_SWING, Proto.P_S_POSITION, Proto.P_S_POSITION_LOOK, Proto.P_S_LOOK, Proto.P_S_PLAYER_INPUT,
+            Proto.P_S_TICK_END, Proto.P_S_BLOCK_DIG, Proto.P_S_USE_ENTITY, Proto.P_S_USE_ITEM, Proto.P_S_HELD_SLOT,
+            Proto.P_S_KEEPALIVE, Proto.P_S_PONG, Proto.P_S_TELEPORT_CONFIRM, Proto.P_S_CHAT_MESSAGE,
+            Proto.P_S_CHAT_COMMAND, Proto.P_S_ENTITY_ACTION, Proto.P_S_CHUNK_BATCH_RECEIVED, Proto.P_S_CLIENT_COMMAND};
+    private static final String[] SENT_NAMES = {"open/use block", "inventory click", "close container", "swing arm",
+            "move", "move+look", "look", "input", "tick end", "mine", "hit/use entity", "use item", "hotbar slot",
+            "keepalive", "pong", "teleport confirm", "chat", "command", "sprint/sneak", "chunks ack", "respawn"};
+
+    private String recentSent() {
+      synchronized (sentLock) {
+        StringBuilder sb = new StringBuilder();
+        String last = null;
+        int run = 0;
+        for (int i = 0; i < sentIds.length; i++) {
+            int pid = sentIds[(sentPos + i) % sentIds.length];
+            if (pid <= 0) continue;
+            String n = "0x" + Integer.toHexString(pid - 1);
+            for (int k = 0; k < SENT_KEYS.length; k++) if (id(SENT_KEYS[k]) == pid - 1) { n = SENT_NAMES[k]; break; }
+            if (n.equals("tick end")) continue; // sent every tick
+            if (n.equals(last)) { run++; continue; }
+            if (last != null) sb.append(last).append(run > 1 ? " x" + run : "").append(", ");
+            last = n;
+            run = 1;
+        }
+        if (last != null) sb.append(last).append(run > 1 ? " x" + run : "");
+        return sb.toString();
+      }
+    }
+
     private void send(Buf b) throws IOException {
         byte[] body = b.toBytes();
+        if (state == PLAY && body.length > 0) {
+            synchronized (sentLock) {
+                int pid = 0, shift = 0, i = 0, c;
+                do { c = body[i++] & 255; pid |= (c & 127) << shift; shift += 7; } while ((c & 128) != 0 && i < body.length && i < 3);
+                sentIds[sentPos] = pid + 1;
+                sentPos = (sentPos + 1) % sentIds.length;
+            }
+        }
         byte[] frame;
         int th = threshold;
         if (th >= 0) {
