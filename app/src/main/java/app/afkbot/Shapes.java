@@ -16,7 +16,16 @@ final class Shapes {
     static final float[][] NONE = {};
 
     static final int EMPTY = 0, CUBE = 1, SLAB = 2, STAIRS = 3, DOOR = 4, TRAPDOOR = 5, GATE = 6, FENCE = 7, WALL = 8,
-            PANE = 9, CARPET = 10, SNOW = 11, BED = 12, CHEST = 13, PATH = 14, BUTTON = 15, LEVER = 16, PLATE = 17;
+            PANE = 9, CARPET = 10, SNOW = 11, BED = 12, CHEST = 13, PATH = 14, BUTTON = 15, LEVER = 16, PLATE = 17,
+            SINK = 18, LADDER = 19, HONEY = 20;
+
+    /** Internal block name (e.g. "packed_ice") of a state, or "". */
+    static String id(int state) {
+        ProtoDef.VersionData vd = data;
+        if (vd == null || state <= 0) return "";
+        int i = vd.blockIndex(state);
+        return i >= 0 && i < vd.blockIds.length ? vd.blockIds[i] : "";
+    }
 
     private static ProtoDef.VersionData data;
     private static float[][][] collisionCache = new float[0][][], outlineCache = new float[0][][];
@@ -45,6 +54,7 @@ final class Shapes {
         int t = type(state);
         if (t == CUBE) return true;
         if (t == SLAB) return "double".equals(prop(state, "type"));
+        if (t == SINK || t == HONEY) return true; // look like full blocks
         return false;
     }
 
@@ -182,6 +192,15 @@ final class Shapes {
             }
             case PLATE:
                 return collision ? NONE : new float[][]{box(1, 0, 1, 15, 1, 15)};
+            case SINK: // soul sand, mud: you sink 2 pixels in
+                return collision ? new float[][]{box(0, 0, 0, 16, 14, 16)} : FULL;
+            case HONEY:
+                return collision ? new float[][]{box(1, 0, 1, 15, 15, 15)} : FULL;
+            case LADDER:
+                if ("south".equals(facing)) return new float[][]{box(0, 0, 0, 16, 16, 3)};
+                if ("west".equals(facing)) return new float[][]{box(13, 0, 0, 16, 16, 16)};
+                if ("east".equals(facing)) return new float[][]{box(0, 0, 0, 3, 16, 16)};
+                return new float[][]{box(0, 0, 13, 16, 16, 16)};
             default:
                 return FULL;
         }

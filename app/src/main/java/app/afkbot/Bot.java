@@ -126,6 +126,9 @@ final class Bot {
     private int sneakTicks;
     private volatile boolean batchPending;
     private volatile String pendingLogout;
+    /** How many times the server moved us back (rejected movement). */
+    static volatile int corrections;
+    private long lastCorrectionLog;
     private ProtoDef.VersionData vdata;
     private int useSequence;
 
@@ -1614,7 +1617,11 @@ final class Bot {
             tid = p.varInt();
         }
         boolean first;
+        double ox0, oy0, oz0;
         synchronized (this) {
+            ox0 = x;
+            oy0 = y;
+            oz0 = z;
             x = (flags & 0x01) != 0 ? x + nx : nx;
             y = (flags & 0x02) != 0 ? y + ny : ny;
             z = (flags & 0x04) != 0 ? z + nz : nz;
@@ -1632,6 +1639,16 @@ final class Bot {
             World.selfYaw = yaw;
             havePos = true;
             if (first) nextJumpAt = System.currentTimeMillis() + 5000;
+        }
+        if (!first) {
+            corrections++;
+            double moved = Math.sqrt((x - ox0) * (x - ox0) + (y - oy0) * (y - oy0) + (z - oz0) * (z - oz0));
+            long now = System.currentTimeMillis();
+            if (now - lastCorrectionLog > 3000) {
+                lastCorrectionLog = now;
+                Hub.log(String.format(Locale.US, "Server corrected your position by %.2f blocks (from %.2f, %.2f, %.2f to %.2f, %.2f, %.2f) %s%s",
+                        moved, ox0, oy0, oz0, x, y, z, blocksAround(), manual ? " - movement was rejected" : ""));
+            }
         }
         send(new Buf(id(Proto.P_S_TELEPORT_CONFIRM)).varInt(tid));
         sendMove(true, true, false);
@@ -1791,8 +1808,9 @@ final class Bot {
         inWater = (MapData.flagsAt((int) Math.floor(x), (int) Math.floor(y + 0.4), (int) Math.floor(z)) & 2) != 0;
         boolean sprint = inSprint && f > 0 && !inSneak && !hCollideM;
         double speed = 0.1 * (sprint ? 1.3 : 1.0);
-        // vanilla: acceleration uses the block's slipperiness (0.6); velocity then decays by slipperiness * 0.91
-        double blockSlip = 0.6;
+        // vanilla: acceleration uses the slipperiness of the block below; velocity then decays by slipperiness * 0.91
+        String below = Shapes.id(MapData.stateAt((int) Math.floor(x), (int) Math.floor(y - 0.5000001), (int) Math.floor(z)));
+        double blockSlip = slipperiness(below);
         double slip = onGroundM ? blockSlip * 0.91 : 0.91;
         double accel = inWater ? 0.02 : onGroundM ? speed * (0.21600002 / (blockSlip * blockSlip * blockSlip)) : (sprint ? 0.026 : 0.02);
         double len = f * f + s * s;
@@ -1804,10 +1822,11 @@ final class Bot {
             vxM += ss * cos - ff * sin;
             vzM += ff * cos + ss * sin;
         }
+        boolean climbing = climbable(Shapes.id(MapData.stateAt((int) Math.floor(x), (int) Math.floor(y), (int) Math.floor(z))));
         if (inJump) {
             if (inWater) vyM += 0.04;
             else if (onGroundM) {
-                vyM = 0.42;
+                vyM = 0.42 * jumpFactor((int) Math.floor(x), (int) Math.floor(y), (int) Math.floor(z));
                 if (sprint) {
                     vxM += -Math.sin(Math.toRadians(yaw)) * 0.2;
                     vzM += Math.cos(Math.toRadians(yaw)) * 0.2;
@@ -1819,7 +1838,20 @@ final class Bot {
             if (!groundBelow(x + vxM, z)) vxM = 0;
             if (!groundBelow(x, z + vzM)) vzM = 0;
         }
-        move(vxM, vyM, vzM);
+        if (climbing) { // ladders, vines...: limited fall speed, sneaking holds you in place
+            vxM = Math.max(-0.15, Math.min(0.15, vxM));
+            vzM = Math.max(-0.15, Math.min(0.15, vzM));
+            vyM = Math.max(vyM, -0.15);
+            if (inSneak && vyM < 0) vyM = 0;
+        }
+        // cobweb, berry bush, powder snow scale this tick's movement
+        double[] stuck = stuckFactor((int) Math.floor(x), (int) Math.floor(y), (int) Math.floor(z));
+        if (stuck != null) move(vxM * stuck[0], vyM * stuck[1], vzM * stuck[2]);
+        else move(vxM, vyM, vzM);
+        if (stuck != null) {
+            vxM = vyM = vzM = 0;
+        }
+        if (climbing && hCollideM) vyM = 0.2; // climb up when walking into a ladder
         if (inWater) {
             vyM = vyM * 0.8 - 0.02;
             vxM *= 0.8;
@@ -1828,10 +1860,63 @@ final class Bot {
             vyM = (vyM - 0.08) * 0.98;
             vxM *= slip;
             vzM *= slip;
+            double sf = speedFactor((int) Math.floor(x), (int) Math.floor(y), (int) Math.floor(z));
+            vxM *= sf;
+            vzM *= sf;
         }
         if (Math.abs(vxM) < 0.003) vxM = 0;
         if (Math.abs(vzM) < 0.003) vzM = 0;
         return onGroundM;
+    }
+
+    // ---- vanilla block properties that change movement ----
+
+    static double slipperiness(String id) {
+        if (id.equals("ice") || id.equals("packed_ice") || id.equals("frosted_ice")) return 0.98;
+        if (id.equals("blue_ice")) return 0.989;
+        if (id.equals("slime_block")) return 0.8;
+        return 0.6;
+    }
+
+    /** Soul sand / honey slow you down (block at your feet, otherwise the one just below). */
+    private static double speedFactor(int bx, int by, int bz) {
+        String at = Shapes.id(MapData.stateAt(bx, by, bz));
+        if (at.equals("water") || at.equals("bubble_column")) return 1;
+        double f = blockSpeed(at);
+        if (f != 1) return f;
+        return blockSpeed(Shapes.id(MapData.stateAt(bx, by - 1, bz)));
+    }
+
+    private static double blockSpeed(String id) {
+        return id.equals("soul_sand") || id.equals("honey_block") ? 0.4 : 1;
+    }
+
+    private static double jumpFactor(int bx, int by, int bz) {
+        String at = Shapes.id(MapData.stateAt(bx, by, bz)), below = Shapes.id(MapData.stateAt(bx, by - 1, bz));
+        return at.equals("honey_block") || below.equals("honey_block") ? 0.5 : 1;
+    }
+
+    private static double[] stuckFactor(int bx, int by, int bz) {
+        for (int dy = 0; dy <= 1; dy++) {
+            String id = Shapes.id(MapData.stateAt(bx, by + dy, bz));
+            if (id.equals("cobweb")) return new double[]{0.25, 0.05, 0.25};
+            if (id.equals("sweet_berry_bush")) return new double[]{0.8, 0.75, 0.8};
+            if (id.equals("powder_snow")) return new double[]{0.9, 1.5, 0.9};
+        }
+        return null;
+    }
+
+    private static boolean climbable(String id) {
+        return id.equals("ladder") || id.equals("vine") || id.equals("scaffolding") || id.startsWith("twisting_vines")
+                || id.startsWith("weeping_vines") || id.startsWith("cave_vines");
+    }
+
+    /** "stone below, air at feet" style description for the correction log. */
+    private String blocksAround() {
+        int bx = (int) Math.floor(x), by = (int) Math.floor(y), bz = (int) Math.floor(z);
+        String below = Shapes.id(MapData.stateAt(bx, by - 1, bz)), feet = Shapes.id(MapData.stateAt(bx, by, bz)),
+                head = Shapes.id(MapData.stateAt(bx, by + 1, bz));
+        return "below=" + (below.isEmpty() ? "?" : below) + " feet=" + (feet.isEmpty() ? "air" : feet) + " head=" + (head.isEmpty() ? "air" : head);
     }
 
     private boolean groundBelow(double px, double pz) {

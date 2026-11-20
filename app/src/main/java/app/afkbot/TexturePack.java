@@ -20,6 +20,9 @@ final class TexturePack {
     interface Images {
         /** Decodes a PNG and returns the first 16x16 frame as 256 ARGB pixels, or null. */
         int[] decode16(byte[] png);
+
+        /** Decodes a PNG scaled to size x size ARGB pixels, or null. */
+        int[] decode(byte[] png, int size);
     }
 
     static final int TILE = 16, GRID = 64, SIZE = TILE * GRID; // 1024x1024 atlas, 4096 tiles
@@ -31,12 +34,14 @@ final class TexturePack {
         int[] tint; // per block: RGB tint for tinted faces (0 = none)
         int[] tintMask; // per block: bit per face that is tinted
         int[] cross; // per block: tile id for plants drawn as an X (-1 = not a plant)
+        int[] chest; // per block: first tile of a 4x4-tile (64x64) chest texture (-1 = not a chest)
         int tiles;
     }
 
     static boolean wanted(String name) {
         return (name.startsWith("assets/minecraft/blockstates/") || name.startsWith("assets/minecraft/models/block/")
-                || name.startsWith("assets/minecraft/textures/block/")) && !name.endsWith(".mcmeta");
+                || name.startsWith("assets/minecraft/textures/block/") || name.startsWith("assets/minecraft/textures/entity/chest/"))
+                && !name.endsWith(".mcmeta");
     }
 
     static Result build(Map<String, byte[]> files, String[] blockIds, Images img) {
@@ -47,6 +52,8 @@ final class TexturePack {
         r.tint = new int[n];
         r.tintMask = new int[n];
         r.cross = new int[n];
+        r.chest = new int[n];
+        java.util.Arrays.fill(r.chest, -1);
         Map<String, Integer> tileOf = new HashMap<String, Integer>();
         Map<String, JSONObject> modelCache = new HashMap<String, JSONObject>();
         // tile 0 = plain white (for untextured faces)
@@ -125,7 +132,31 @@ final class TexturePack {
                 // leave this block untextured (flat colour)
             }
         }
-        r.tiles = next[0];
+        // chests are drawn by a model using 64x64 "entity" textures: give each a 4x4-tile block of the atlas
+        Map<String, Integer> chestTiles = new HashMap<String, Integer>();
+        int nextBlock = ((next[0] + GRID * 4 - 1) / (GRID * 4)) * 4; // first free row of 4-tile-high blocks
+        int col = 0;
+        for (int b = 0; b < n; b++) {
+            String tex = chestTexture(blockIds[b]);
+            if (tex == null) continue;
+            Integer t = chestTiles.get(tex);
+            if (t == null) {
+                byte[] png = files.get("assets/minecraft/textures/entity/chest/" + tex + ".png");
+                int[] px = png == null ? null : img.decode(png, 64);
+                if (px == null || nextBlock + 4 > GRID) continue;
+                int tileX = col * 4, tileY = nextBlock;
+                for (int y = 0; y < 64; y++) System.arraycopy(px, y * 64, r.atlas, (tileY * TILE + y) * SIZE + tileX * TILE, 64);
+                t = tileY * GRID + tileX;
+                chestTiles.put(tex, t);
+                col++;
+                if (col * 4 >= GRID) {
+                    col = 0;
+                    nextBlock += 4;
+                }
+            }
+            r.chest[b] = t;
+        }
+        r.tiles = next[0] + chestTiles.size() * 16;
         return r;
     }
 
@@ -198,6 +229,21 @@ final class TexturePack {
         return id;
     }
 
+    /** Which chest texture a block uses (entity/chest/*.png), or null. */
+    static String chestTexture(String id) {
+        String s = id.startsWith("waxed_") ? id.substring(6) : id;
+        switch (s) {
+            case "chest": return "normal";
+            case "trapped_chest": return "trapped";
+            case "ender_chest": return "ender";
+            case "copper_chest": return "copper";
+            case "exposed_copper_chest": return "copper_exposed";
+            case "weathered_copper_chest": return "copper_weathered";
+            case "oxidized_copper_chest": return "copper_oxidized";
+            default: return null;
+        }
+    }
+
     /** Fixed "plains" biome tints for grass, foliage and water. */
     static int tintFor(String id) {
         if (id.equals("water") || id.equals("bubble_column")) return 0x3F76E4;
@@ -219,7 +265,8 @@ final class TexturePack {
             for (int f = 0; f < 6; f++) sb.append(f > 0 ? "," : "").append(r.faces[b][f]);
             sb.append(']');
         }
-        sb.append("],\"tint\":").append(arr(r.tint)).append(",\"tintMask\":").append(arr(r.tintMask)).append(",\"cross\":").append(arr(r.cross)).append('}');
+        sb.append("],\"tint\":").append(arr(r.tint)).append(",\"tintMask\":").append(arr(r.tintMask)).append(",\"cross\":").append(arr(r.cross))
+                .append(",\"chest\":").append(arr(r.chest)).append('}');
         return sb.toString();
     }
 
@@ -232,7 +279,7 @@ final class TexturePack {
     /** Loaded atlas mapping for the renderer. */
     static final class Map3D {
         final int[][] faces;
-        final int[] tint, tintMask, cross;
+        final int[] tint, tintMask, cross, chest;
 
         Map3D(String json) throws org.json.JSONException {
             JSONObject j = new JSONObject(json);
@@ -245,6 +292,12 @@ final class TexturePack {
             tint = ints(j.getJSONArray("tint"));
             tintMask = ints(j.getJSONArray("tintMask"));
             cross = ints(j.getJSONArray("cross"));
+            JSONArray ch = j.optJSONArray("chest");
+            if (ch != null) chest = ints(ch);
+            else {
+                chest = new int[faces.length];
+                java.util.Arrays.fill(chest, -1);
+            }
         }
 
         private static int[] ints(JSONArray a) throws org.json.JSONException {

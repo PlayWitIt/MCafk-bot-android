@@ -229,6 +229,7 @@ for v,p in dp.items():
         if nm.endswith('_button'): return 15
         if nm=='lever': return 16
         if nm.endswith('_pressure_plate'): return 17
+        if nm=='ladder': return 19
         if bb!='block':
             return 11 if nm=='snow' else 0
         if nm.endswith('_slab'): return 2
@@ -243,6 +244,9 @@ for v,p in dp.items():
         if nm.endswith('_bed'): return 12
         if nm in ('chest','trapped_chest','ender_chest'): return 13
         if nm in ('farmland','dirt_path'): return 14
+        if nm in ('soul_sand','mud'): return 18
+        if nm=='ladder': return 19
+        if nm=='honey_block': return 20
         return 1
     def props(b):
         out=[]

@@ -18,6 +18,7 @@ final class World {
         final String type;
         final UUID uuid;
         double x, y, z;
+        float yaw; // facing, from the direction it last moved
 
         Ent(int id, char kind, String type, UUID uuid, double x, double y, double z) {
             this.id = id;
@@ -33,6 +34,8 @@ final class World {
     /** Immutable copy for drawing. */
     static final class Dot {
         int id = -1;
+        String type = "";
+        float yaw;
         final char kind;
         final String label;
         final double dx, dy, dz, dist;
@@ -89,12 +92,15 @@ final class World {
             e.x += dx;
             e.y += dy;
             e.z += dz;
+            if (dx * dx + dz * dz > 1e-4) e.yaw = (float) Math.toDegrees(Math.atan2(-dx, dz));
         }
     }
 
     static synchronized void moveTo(int id, double x, double y, double z) {
         Ent e = ENTS.get(id);
         if (e != null) {
+            double dx = x - e.x, dz = z - e.z;
+            if (dx * dx + dz * dz > 1e-4 && dx * dx + dz * dz < 64) e.yaw = (float) Math.toDegrees(Math.atan2(-dx, dz));
             e.x = x;
             e.y = y;
             e.z = z;
@@ -139,6 +145,8 @@ final class World {
                 boolean friend = e.kind == 'p' && friends != null && friends.contains(label);
                 Dot d = new Dot(e.kind, label, e.x - sx, e.y - sy, e.z - sz, friend);
                 d.id = e.id;
+                d.type = e.kind == 'p' ? "player" : e.type;
+                d.yaw = e.yaw;
                 out.add(d);
             }
         }

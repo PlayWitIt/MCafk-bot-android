@@ -24,6 +24,7 @@ final class ModStore {
         initialised = true;
         final Context app = ctx.getApplicationContext();
         ModEngine.host = new Host(app);
+        EntityModels.init(app);
         Hub.versionLoader = new Hub.VersionLoader() {
             @Override
             public ProtoDef.VersionData load(int protocol) throws Exception {

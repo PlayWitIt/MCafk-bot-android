@@ -37,7 +37,7 @@ final class TextureStore {
     static volatile boolean busy;
 
     static File dir(Context c, String version) {
-        return new File(c.getFilesDir(), "textures/" + version);
+        return new File(c.getFilesDir(), "textures/v2-" + version); // v2: includes chest textures
     }
 
     static boolean have(Context c, String version) {
@@ -103,6 +103,20 @@ final class TextureStore {
                     int[] px = new int[256];
                     for (int y = 0; y < 16; y++)
                         for (int x = 0; x < 16; x++) px[y * 16 + x] = b.getPixel(x * w / 16, y * h / 16);
+                    b.recycle();
+                    return px;
+                }
+
+                @Override
+                public int[] decode(byte[] png, int size) {
+                    BitmapFactory.Options o = new BitmapFactory.Options();
+                    o.inScaled = false;
+                    Bitmap b = BitmapFactory.decodeByteArray(png, 0, png.length, o);
+                    if (b == null) return null;
+                    int w = b.getWidth(), h = b.getHeight();
+                    int[] px = new int[size * size];
+                    for (int y = 0; y < size; y++)
+                        for (int x = 0; x < size; x++) px[y * size + x] = b.getPixel(x * w / size, y * h / size);
                     b.recycle();
                     return px;
                 }

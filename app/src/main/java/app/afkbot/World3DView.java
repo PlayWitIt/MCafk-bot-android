@@ -12,6 +12,8 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.List;
 
 import javax.microedition.khronos.egl.EGLConfig;
@@ -376,6 +378,10 @@ public class World3DView extends GLSurfaceView implements GLSurfaceView.Renderer
                         cross(solid, x, y, z, tm.cross[bi], tm.tint[bi]);
                         continue;
                     }
+                    if (col == -2 && bi >= 0 && tm.chest != null && bi < tm.chest.length && tm.chest[bi] >= 0) {
+                        chestModel(solid, x, y, z, tm.chest[bi], Shapes.prop(st, "facing"));
+                        continue;
+                    }
                     if (col == -2) {
                         shaped(solid, x, y, z, MapData.colorOf(st), Shapes.outline(st), noise, tm, bi);
                         continue;
@@ -454,6 +460,60 @@ public class World3DView extends GLSurfaceView implements GLSurfaceView.Renderer
                     uvOf(out, tile, f, lx, ly, lz);
                     out.add(cr * s, cg * s, cb * s, 1f);
                 }
+            }
+        }
+    }
+
+    /** Minecraft's chest model (body, lid, latch) with the 64x64 chest texture, turned to face the right way. */
+    private static void chestModel(FloatList out, int x, int y, int z, int tile, String facing) {
+        int tx = (tile % TexturePack.GRID) * TexturePack.TILE, ty = (tile / TexturePack.GRID) * TexturePack.TILE;
+        float yaw = "west".equals(facing) ? 90 : "north".equals(facing) ? 180 : "east".equals(facing) ? 270 : 0;
+        // model space: pixels, front facing south (+z); box-UV origins from the chest texture layout
+        modelBox(out, x, y, z, yaw, tx, ty, 64, 1, 0, 1, 14, 10, 14, 0, 19);   // body
+        modelBox(out, x, y, z, yaw, tx, ty, 64, 1, 9, 1, 14, 5, 14, 0, 0);     // lid
+        modelBox(out, x, y, z, yaw, tx, ty, 64, 7, 7, 15, 2, 4, 1, 0, 0);      // latch
+    }
+
+    /**
+     * A textured box (Minecraft "box UV" layout) in pixel units within a block, rotated around the block
+     * centre by yaw. (bx,by,bz) = box corner, (w,h,d) = size, (u,v) = texture origin, texture at atlas px (tx,ty).
+     */
+    static void modelBox(FloatList out, int x, int y, int z, float yaw, int tx, int ty, int texSize,
+                         float bx, float by, float bz, float w, float h, float d, float u, float v) {
+        // texture rectangles (u0, v0, width, height) for: up, down, north, south, east, west
+        // Minecraft entity models are defined upside down (y points down), so the "down" rectangle is the visible top
+        float[][] rect = {
+                {u + d + w, v, w, d},         // top (for the chest body this is the dark inside)
+                {u + d, v, w, d},             // bottom
+                {u + d, v + d, w, h},         // north (back)
+                {u + d + w + d, v + d, w, h}, // south (front, with the latch mark)
+                {u + d + w, v + d, d, h},     // east
+                {u, v + d, d, h},             // west
+        };
+        double a = Math.toRadians(yaw), cos = Math.cos(a), sin = Math.sin(a);
+        float scale = TexturePack.SIZE;
+        for (int f = 0; f < 6; f++) {
+            float[][] q = FACE[f];
+            float s = SHADE[f];
+            for (int k : new int[]{0, 1, 2, 0, 2, 3}) {
+                float lx = bx + q[k][0] * w, ly = by + q[k][1] * h, lz = bz + q[k][2] * d; // pixels
+                float fx = q[k][0], fy = q[k][1], fz = q[k][2];
+                float uu, vv;
+                switch (f) {
+                    case 0: uu = fx; vv = fz; break;
+                    case 1: uu = fx; vv = 1 - fz; break;
+                    case 2: uu = 1 - fx; vv = 1 - fy; break;
+                    case 3: uu = fx; vv = 1 - fy; break;
+                    case 4: uu = 1 - fz; vv = 1 - fy; break;
+                    default: uu = fz; vv = 1 - fy; break;
+                }
+                // rotate around the block centre (8, 8) in pixels
+                double cx = lx - 8, cz = lz - 8;
+                double rx = cx * cos - cz * sin, rz = cx * sin + cz * cos;
+                out.add(x + (float) (rx + 8) / 16f, y + ly / 16f, z + (float) (rz + 8) / 16f);
+                float[] r = rect[f];
+                out.uv((tx + r[0] + uu * r[2]) / scale, (ty + r[1] + vv * r[3]) / scale);
+                out.add(s, s, s, 1f);
             }
         }
     }
@@ -755,10 +815,22 @@ public class World3DView extends GLSurfaceView implements GLSurfaceView.Renderer
         Bot.Config cfg = Hub.config;
         List<World.Dot> dots = World.snapshot(cfg != null ? cfg.friendSet() : null);
         int n = 0;
+        Map<EntityModels.Model, FloatList> byModel = new HashMap<EntityModels.Model, FloatList>();
         for (World.Dot d : dots) {
             if (d.dist > radius + 16 || ++n > 300) continue;
             float x = px + (float) d.dx, y = py + (float) d.dy, z = pz + (float) d.dz;
             int col = RadarView.color(d) & 0xFFFFFF;
+            EntityModels.Model model = n <= 80 ? EntityModels.get(d.type) : null;
+            if (model != null) {
+                FloatList ml = byModel.get(model);
+                if (ml == null) byModel.put(model, ml = new FloatList(4096));
+                placeModel(ml, model.mesh, x, y, z, d.yaw);
+                if (d.kind == 'p') {
+                    float[] sp = project(x, y + 2.2f, z);
+                    if (sp != null) labels.add(new Object[]{sp[0], sp[1], d.label + "  " + Math.round(d.dist) + "m", col});
+                }
+                continue;
+            }
             if (d.kind == 'p') {
                 humanoid(f, x, y, z, 0, col);
                 float[] sp = project(x, y + 2.2f, z);
@@ -768,7 +840,39 @@ public class World3DView extends GLSurfaceView implements GLSurfaceView.Renderer
             else box(f, x, y + 0.1f, z, 0.3f, 0.3f, 0.3f, col);
         }
         drawClient(f, GLES20.GL_TRIANGLES);
+        // real models: one draw per mob type with its own texture
+        GLES20.glDisable(GLES20.GL_CULL_FACE);
+        for (Map.Entry<EntityModels.Model, FloatList> en : byModel.entrySet()) {
+            EntityModels.Model m = en.getKey();
+            if (m.glTex == 0) {
+                int[] t = new int[1];
+                GLES20.glGenTextures(1, t, 0);
+                m.glTex = t[0];
+                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, m.glTex);
+                GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_NEAREST);
+                GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_NEAREST);
+                GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
+                GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
+                GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, m.texture, 0);
+            }
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, m.glTex);
+            drawClient(en.getValue(), GLES20.GL_TRIANGLES);
+        }
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texId);
+        GLES20.glEnable(GLES20.GL_CULL_FACE);
         return labels;
+    }
+
+    /** Adds a model's triangles at (x, y, z), turned to face yaw (Minecraft degrees). */
+    private static void placeModel(FloatList out, float[] mesh, float x, float y, float z, float yaw) {
+        double a = Math.toRadians(yaw + 180), cos = Math.cos(a), sin = Math.sin(a);
+        for (int i = 0; i + Geo.STRIDE <= mesh.length; i += Geo.STRIDE) {
+            float mx = mesh[i], my = mesh[i + 1], mz = mesh[i + 2];
+            out.add(x + (float) (mx * cos - mz * sin), y + my, z + (float) (mx * sin + mz * cos));
+            out.uv(mesh[i + 3], mesh[i + 4]);
+            float s = mesh[i + 5];
+            out.add(s, s, s, 1f);
+        }
     }
 
     private float[] project(float x, float y, float z) {
