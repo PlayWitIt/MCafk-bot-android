@@ -173,6 +173,7 @@ public class MainActivity extends Activity implements Hub.Listener {
 
         // header
         LinearLayout header = new LinearLayout(this);
+        headerView = header;
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setPadding(dp(18), dp(14), dp(18), dp(8));
@@ -202,6 +203,7 @@ public class MainActivity extends Activity implements Hub.Listener {
 
         // bottom navigation
         LinearLayout nav = new LinearLayout(this);
+        navView = nav;
         nav.setOrientation(LinearLayout.HORIZONTAL);
         nav.setBackgroundColor(SURFACE);
         nav.setPadding(dp(4), dp(6), dp(4), dp(8));
@@ -249,6 +251,11 @@ public class MainActivity extends Activity implements Hub.Listener {
                 }
                 boolean keyboard = ime > bottom;
                 // keyboard open: push everything up above it; otherwise extend the tab bar under the system buttons
+                if (fullscreen) {
+                    v.setPadding(0, 0, 0, 0);
+                    navRef.setVisibility(View.GONE);
+                    return in;
+                }
                 v.setPadding(left, top, right, keyboard ? ime : 0);
                 navRef.setPadding(dp(4), dp(6), dp(4), navPad + (keyboard ? 0 : bottom));
                 navRef.setVisibility(keyboard ? View.GONE : View.VISIBLE);
@@ -260,6 +267,7 @@ public class MainActivity extends Activity implements Hub.Listener {
     }
 
     private void selectTab(int i) {
+        if (fullscreen && i != T_3D) setFullscreen(false);
         tab = i;
         for (int k = 0; k < TABS.length; k++) {
             pageViews[k].setVisibility(k == i ? View.VISIBLE : View.GONE);
@@ -558,12 +566,57 @@ public class MainActivity extends Activity implements Hub.Listener {
     private LinearLayout hotbar;
     private int shownHotbar = -1;
     private TextView texChip;
+    private View headerView, navView, card3d;
+    private TextView fsButton;
+    private LinearLayout page3d;
+    private boolean fullscreen;
+
+    /** Full screen 3D: hides the app header, tabs, settings card and Android's system bars. */
+    private void setFullscreen(boolean on) {
+        if (on && tab != T_3D) return;
+        fullscreen = on;
+        headerView.setVisibility(on ? View.GONE : View.VISIBLE);
+        navView.setVisibility(on ? View.GONE : View.VISIBLE);
+        card3d.setVisibility(on ? View.GONE : View.VISIBLE);
+        page3d.setPadding(on ? 0 : dp(12), on ? 0 : dp(4), on ? 0 : dp(12), on ? 0 : dp(8));
+        ((LinearLayout.LayoutParams) holder3d.getLayoutParams()).topMargin = on ? 0 : dp(10);
+        holder3d.setBackground(on ? null : round(SURFACE, dp(16), STROKE));
+        if (fsButton != null) fsButton.setText(on ? "\u2715" : "\u26F6");
+        if (Build.VERSION.SDK_INT >= 30) {
+            android.view.WindowInsetsController c = getWindow().getInsetsController();
+            if (c != null) {
+                if (on) {
+                    c.setSystemBarsBehavior(android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+                    c.hide(android.view.WindowInsets.Type.systemBars());
+                } else {
+                    c.show(android.view.WindowInsets.Type.systemBars());
+                }
+            }
+        } else {
+            //noinspection deprecation
+            getWindow().getDecorView().setSystemUiVisibility(on ? View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_FULLSCREEN
+                    | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION : 0);
+        }
+        getWindow().getDecorView().requestApplyInsets();
+        holder3d.requestLayout();
+        if (on) toast("Full screen - tap \u2715 or press Back to exit. Rotate the phone for landscape.");
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (fullscreen) {
+            setFullscreen(false);
+            return;
+        }
+        super.onBackPressed();
+    }
     private boolean texturesOffByUser;
 
     private View build3d() {
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
         col.setPadding(dp(12), dp(4), dp(12), dp(8));
+        page3d = col;
         LinearLayout c = module(col, "3D view", "See the real world around you. Tap a block to select it, drive to move, open chests.", cfg.view3d, new Toggle() {
             public void set(boolean v) {
                 cfg.view3d = v;
@@ -621,6 +674,7 @@ public class MainActivity extends Activity implements Hub.Listener {
                 }
             });
         }
+        card3d = c;
         LinearLayout acts = chipRow(c);
         final TextView driveChip = text("✥ Drive", 13, TEXT, true);
         driveChip.setPadding(dp(14), dp(8), dp(14), dp(8));
@@ -694,9 +748,22 @@ public class MainActivity extends Activity implements Hub.Listener {
             }
         });
         FrameLayout.LayoutParams tl = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP);
-        tl.setMargins(dp(8), dp(8), dp(8), 0);
+        tl.setMargins(dp(8), dp(8), dp(60), 0);
         holder3d.addView(targetBar, tl);
         targetBar.setVisibility(View.GONE);
+
+        // full screen toggle (top-right)
+        fsButton = text("\u26F6", 22, TEXT, true);
+        fsButton.setGravity(Gravity.CENTER);
+        fsButton.setBackground(round(0xCC141821, dp(12), STROKE));
+        FrameLayout.LayoutParams fl = new FrameLayout.LayoutParams(dp(46), dp(46), Gravity.TOP | Gravity.END);
+        fl.setMargins(0, dp(8), dp(8), 0);
+        holder3d.addView(fsButton, fl);
+        fsButton.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                setFullscreen(!fullscreen);
+            }
+        });
 
         // drive controls (bottom)
         driveControls = new LinearLayout(this);
