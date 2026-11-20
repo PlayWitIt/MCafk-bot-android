@@ -108,6 +108,11 @@ final class Inv {
         return new Item(id, count, name, detail);
     }
 
+    /** Rejects nonsense that means the item data was misread. */
+    static boolean plausible(Item it, ProtoDef.VersionData vd) {
+        return it.count > 0 && it.count <= 127 && it.id > 0 && it.id < vd.itemNames.length;
+    }
+
     static int num(Object o) {
         return o instanceof Number ? ((Number) o).intValue() : 0;
     }

@@ -580,7 +580,6 @@ public class World3DView extends GLSurfaceView implements GLSurfaceView.Renderer
 
     /** Distance from the player's eyes to the centre of a block. */
     static double reach(int[] b) {
-        double dx = b[0] + 0.5 - World.selfX, dy = b[1] + 0.5 - (World.selfY + 1.62), dz = b[2] + 0.5 - World.selfZ;
-        return Math.sqrt(dx * dx + dy * dy + dz * dz);
+        return World.reach(b);
     }
 }

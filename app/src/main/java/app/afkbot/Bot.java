@@ -413,6 +413,7 @@ final class Bot {
             try {
                 vdata = vl.load(Proto.PROTOCOLS[idx]);
                 Hub.versionData = vdata;
+                Hub.log("Chests, inventory and block names ready");
             } catch (Exception e) {
                 Hub.log("Container support unavailable: " + e.getMessage());
             }
@@ -875,7 +876,13 @@ final class Bot {
                 MapData.setBlock(sx * 16 + lx, sy * 16 + ly, sz * 16 + lz, st);
             }
         } else if (pid == id(Proto.P_C_OPEN_WINDOW) && vdata != null) {
-            java.util.Map<String, Object> m = vdata.readPacket("open_window", p);
+            java.util.Map<String, Object> m;
+            try {
+                m = vdata.readPacket("open_window", p);
+            } catch (IOException e) {
+                logOnce("Couldn't read the container title: " + e.getMessage());
+                return true;
+            }
             Object t = m.get("windowTitle");
             Inv.title = t instanceof String && ((String) t).startsWith("{") ? Text.fromJson((String) t) : Text.strip(Text.flatten(t));
             Inv.openId = Inv.num(m.get("windowId"));
@@ -884,17 +891,45 @@ final class Bot {
             Inv.version++;
             Hub.log("Opened " + (Inv.title.isEmpty() ? "container" : Inv.title));
         } else if (pid == id(Proto.P_C_WINDOW_ITEMS) && vdata != null) {
-            java.util.Map<String, Object> m = vdata.readPacket("window_items", p);
-            int wid = Inv.num(m.get("windowId"));
+            // read item by item so one unusual item can't lose the whole inventory
+            int wid = proto >= 768 ? p.varInt() : p.u8();
+            int stateId = p.varInt();
+            int n = p.varInt();
             java.util.List<Inv.Item> list = new java.util.ArrayList<Inv.Item>();
-            Object items = m.get("items");
-            if (items instanceof java.util.List) for (Object o : (java.util.List<?>) items) list.add(Inv.fromSlot(o, vdata));
-            Inv.stateId = Inv.num(m.get("stateId"));
-            if (wid == 0) Inv.inventory = list;
-            else if (wid == Inv.openId) Inv.slots = list;
+            String slotType = proto >= 766 ? "Slot" : "slot";
+            String failed = null;
+            for (int i = 0; i < n && i < 400; i++) {
+                if (failed != null) {
+                    list.add(null);
+                    continue;
+                }
+                try {
+                    Inv.Item it = Inv.fromSlot(vdata.def.read(slotType, p), vdata);
+                    if (it != null && !Inv.plausible(it, vdata)) throw new IOException("unexpected item data");
+                    list.add(it);
+                } catch (IOException e) {
+                    failed = "slot " + i + ": " + e.getMessage();
+                    list.add(null);
+                }
+            }
+            if (failed != null) logOnce("Some items couldn't be read (" + failed + ") - they show as empty");
+            Inv.stateId = stateId;
+            if (wid == 0) {
+                if (Inv.inventory.isEmpty()) Hub.log("Inventory received (" + countItems(list) + " stacks)");
+                Inv.inventory = list;
+            } else if (wid == Inv.openId) {
+                Inv.slots = list;
+                Hub.log("Container contents: " + countItems(list.subList(0, Math.max(0, list.size() - 36))) + " stacks");
+            }
             Inv.version++;
         } else if (pid == id(Proto.P_C_SET_SLOT) && vdata != null) {
-            java.util.Map<String, Object> m = vdata.readPacket("set_slot", p);
+            java.util.Map<String, Object> m;
+            try {
+                m = vdata.readPacket("set_slot", p);
+            } catch (IOException e) {
+                logOnce("An item update couldn't be read: " + e.getMessage());
+                return true;
+            }
             int wid = Inv.num(m.get("windowId")), slot = Inv.num(m.get("slot"));
             Inv.stateId = Inv.num(m.get("stateId"));
             java.util.List<Inv.Item> target = wid == 0 ? Inv.inventory : wid == Inv.openId ? Inv.slots : null;
@@ -912,6 +947,58 @@ final class Bot {
             return false;
         }
         return true;
+    }
+
+    private final java.util.HashSet<String> logged = new java.util.HashSet<String>();
+
+    private void logOnce(String msg) {
+        if (logged.add(msg)) Hub.log(msg);
+    }
+
+    private static int countItems(java.util.List<Inv.Item> l) {
+        int n = 0;
+        for (Inv.Item it : l) if (it != null) n++;
+        return n;
+    }
+
+    /** Container blocks within range of the player, nearest first: {x, y, z} plus name. */
+    static java.util.List<Object[]> nearbyContainers(int range) {
+        java.util.List<Object[]> out = new java.util.ArrayList<Object[]>();
+        ProtoDef.VersionData vd = Hub.versionData;
+        if (vd == null || !World.inWorld) return out;
+        int px = (int) Math.floor(World.selfX), py = (int) Math.floor(World.selfY), pz = (int) Math.floor(World.selfZ);
+        for (int x = px - range; x <= px + range; x++)
+            for (int y = py - range; y <= py + range; y++)
+                for (int z = pz - range; z <= pz + range; z++) {
+                    int st = MapData.stateAt(x, y, z);
+                    if (st <= 0) continue;
+                    String name = vd.blockName(st);
+                    if (!isContainer(name)) continue;
+                    int[] b = {x, y, z, 1};
+                    out.add(new Object[]{b, name, World.reach(b)});
+                }
+        java.util.Collections.sort(out, new java.util.Comparator<Object[]>() {
+            @Override
+            public int compare(Object[] a, Object[] b) {
+                return Double.compare((Double) a[2], (Double) b[2]);
+            }
+        });
+        return out;
+    }
+
+    static boolean isContainer(String n) {
+        return n.endsWith("Chest") || n.endsWith("Barrel") || n.endsWith("Shulker Box") || n.equals("Hopper") || n.equals("Dispenser")
+                || n.equals("Dropper") || n.endsWith("Furnace") || n.equals("Smoker") || n.equals("Crafter") || n.equals("Brewing Stand")
+                || n.endsWith("Chest Boat") || n.equals("Decorated Pot") || n.equals("Chiseled Bookshelf");
+    }
+
+    /** Face of the block that points towards the player (what a real click would hit). */
+    static int faceToward(int[] b) {
+        double dx = World.selfX - (b[0] + 0.5), dy = World.selfY + 1.62 - (b[1] + 0.5), dz = World.selfZ - (b[2] + 0.5);
+        double ax = Math.abs(dx), ay = Math.abs(dy), az = Math.abs(dz);
+        if (ay >= ax && ay >= az) return dy > 0 ? 1 : 0;
+        if (ax >= az) return dx > 0 ? 5 : 4;
+        return dz > 0 ? 3 : 2;
     }
 
     private static long readVarLong(Buf.In p) throws IOException {
@@ -954,12 +1041,12 @@ final class Bot {
                         lookPitch = pitch;
                     }
                     sendMove(true, true, onGroundM);
-                    send(new Buf(id(Proto.P_S_SWING)).varInt(0));
                     Buf b = new Buf(id(Proto.P_S_USE_ITEM_ON)).varInt(0).i64(packPos(bx, by, bz)).varInt(face)
                             .f32(0.5f).f32(face == 1 ? 1f : 0.5f).f32(0.5f).bool(false);
                     if (proto >= 768) b.bool(false);
                     b.varInt(++useSequence);
                     send(b);
+                    send(new Buf(id(Proto.P_S_SWING)).varInt(0));
                     Inv.status = "Opening...";
                     Inv.version++;
                 } catch (IOException ignored) {

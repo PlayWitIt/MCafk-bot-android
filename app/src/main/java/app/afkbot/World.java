@@ -148,6 +148,12 @@ final class World {
         return out;
     }
 
+    /** Distance from the player's eyes to the centre of block {x, y, z}. */
+    static double reach(int[] b) {
+        double dx = b[0] + 0.5 - selfX, dy = b[1] + 0.5 - (selfY + 1.62), dz = b[2] + 0.5 - selfZ;
+        return Math.sqrt(dx * dx + dy * dy + dz * dz);
+    }
+
     /** Nearest non-friend player, or null. */
     static Dot nearestThreat(Friends friends) {
         for (Dot d : snapshot(friends)) if (d.kind == 'p' && !d.friend) return d;

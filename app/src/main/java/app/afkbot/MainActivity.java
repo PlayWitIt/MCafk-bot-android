@@ -103,7 +103,9 @@ public class MainActivity extends Activity implements Hub.Listener {
                 updateViewLabel();
             } else if (tab == T_HOME) {
                 miniRadar.invalidate();
+                if (System.currentTimeMillis() - lastStorageScan > 2000) refreshStorage();
             }
+            syncContainerDialog();
             ui.postDelayed(this, 500); // 2 frames per second is plenty and nearly free
         }
     };
@@ -295,6 +297,8 @@ public class MainActivity extends Activity implements Hub.Listener {
         LinearLayout grid3 = row(col);
         statActions = tile(grid3, "Anti-AFK actions");
         statNext = tile(grid3, "Next action");
+
+        buildStorageCard(col);
 
         LinearLayout rc = card(col);
         LinearLayout rh = row(rc);
@@ -653,13 +657,7 @@ public class MainActivity extends Activity implements Hub.Listener {
         openBtn.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
                 int[] t = target;
-                Bot b = Hub.bot;
-                if (t == null || b == null) return;
-                if (World3DView.reach(t) > 4.5) {
-                    toast("Too far - walk within 4.5 blocks (use Drive)");
-                    return;
-                }
-                b.useBlock(t[0], t[1], t[2], t[3]);
+                if (t != null) openBlock(t);
             }
         });
         FrameLayout.LayoutParams tl = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP);
@@ -1551,6 +1549,168 @@ public class MainActivity extends Activity implements Hub.Listener {
             "  if (e.message === '!ping') bot.chat('pong');\n" +
             "});\n\n" +
             "Mods can't use files, the internet or Java. Each event must finish quickly; a mod that keeps failing is turned off.";
+
+    // ---------------------------------------------------------------- Storage (works from any tab)
+
+    private LinearLayout storageList;
+    private long lastStorageScan;
+    private android.app.AlertDialog containerDialog;
+    private LinearLayout dialogList;
+    private TextView dialogTitle;
+    private int dialogVersion = -1;
+
+    private void buildStorageCard(LinearLayout col) {
+        LinearLayout c = card(col);
+        LinearLayout head = row(c);
+        head.addView(text("Storage nearby", 15, TEXT, true), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        TextView inv = text("Inventory", 13, ACCENT, true);
+        head.addView(inv);
+        inv.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                showInventory();
+            }
+        });
+        c.addView(text("Chests, barrels, shulkers and more within 8 blocks. You must be within 4.5 blocks to open one (walk closer with Drive on the 3D tab).", 12, MUTED, false));
+        storageList = new LinearLayout(this);
+        storageList.setOrientation(LinearLayout.VERTICAL);
+        c.addView(storageList);
+        refreshStorage();
+    }
+
+    private void refreshStorage() {
+        if (storageList == null) return;
+        lastStorageScan = System.currentTimeMillis();
+        storageList.removeAllViews();
+        Bot b = Hub.bot;
+        if (b == null || !World.inWorld) {
+            storageList.addView(text("Start AFK to see storage around you.", 13, MUTED, false));
+            return;
+        }
+        if (!b.containersSupported()) {
+            storageList.addView(text("Opening containers needs a 1.20.2+ server.", 13, MUTED, false));
+            return;
+        }
+        List<Object[]> found = Bot.nearbyContainers(8);
+        if (found.isEmpty()) {
+            storageList.addView(text("No storage blocks within 8 blocks" + (MapData.chunkCount() == 0 ? " (terrain not loaded yet - keep \"Show terrain\" on in the Map tab)" : "") + ".", 13, MUTED, false));
+            return;
+        }
+        int shown = 0;
+        for (final Object[] f : found) {
+            if (++shown > 8) break;
+            final int[] blk = (int[]) f[0];
+            double dist = (Double) f[2];
+            LinearLayout r = row(storageList);
+            TextView t = text(String.format(Locale.US, "%s  •  %.1f m\n%d, %d, %d", f[1], dist, blk[0], blk[1], blk[2]), 13, dist <= 4.5 ? TEXT : MUTED, false);
+            r.addView(t, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+            Button open = smallButton(dist <= 4.5 ? "Open" : "Too far", dist <= 4.5 ? ACCENT : SURFACE2);
+            open.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(36)));
+            r.addView(open);
+            open.setOnClickListener(new View.OnClickListener() {
+                public void onClick(View v) {
+                    openBlock(blk);
+                }
+            });
+        }
+    }
+
+    /** Opens a container block (from Home, Map or 3D). */
+    private void openBlock(int[] blk) {
+        Bot b = Hub.bot;
+        if (b == null || !World.inWorld) {
+            toast("Start AFK first");
+            return;
+        }
+        if (!b.containersSupported()) {
+            toast("This server version isn't supported for containers");
+            return;
+        }
+        double r = World3DView.reach(blk);
+        if (r > 4.5) {
+            toast(String.format(Locale.US, "Too far (%.1f m) - get within 4.5 blocks first", r));
+            return;
+        }
+        b.useBlock(blk[0], blk[1], blk[2], Bot.faceToward(blk));
+        toast("Opening...");
+        final int before = Inv.version;
+        ui.postDelayed(new Runnable() {
+            public void run() {
+                if (Inv.openId < 0 && Inv.version == before)
+                    toast("The server didn't open it - it may be locked, blocked by a block above, or you're too far");
+            }
+        }, 2500);
+    }
+
+    /** Shows the open container in a dialog, unless the 3D tab is showing its own panel. */
+    private void syncContainerDialog() {
+        boolean open = Inv.openId >= 0;
+        boolean panelVisible = tab == T_3D && view3d != null;
+        if (!open || panelVisible) {
+            if (containerDialog != null) {
+                android.app.AlertDialog d = containerDialog;
+                containerDialog = null;
+                d.setOnDismissListener(null);
+                d.dismiss();
+            }
+            return;
+        }
+        if (containerDialog == null) {
+            LinearLayout box = new LinearLayout(this);
+            box.setOrientation(LinearLayout.VERTICAL);
+            box.setPadding(dp(16), dp(8), dp(16), 0);
+            dialogTitle = text("Container", 16, TEXT, true);
+            box.addView(dialogTitle);
+            ScrollView sv = new ScrollView(this);
+            dialogList = new LinearLayout(this);
+            dialogList.setOrientation(LinearLayout.VERTICAL);
+            sv.addView(dialogList);
+            box.addView(sv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(360)));
+            containerDialog = new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                    .setView(box)
+                    .setPositiveButton("Close", null)
+                    .setNeutralButton("Take all", null)
+                    .create();
+            containerDialog.setOnDismissListener(new android.content.DialogInterface.OnDismissListener() {
+                public void onDismiss(android.content.DialogInterface d) {
+                    containerDialog = null;
+                    Bot b = Hub.bot;
+                    if (b != null && Inv.openId >= 0) b.closeContainer();
+                }
+            });
+            containerDialog.show();
+            containerDialog.getButton(android.app.AlertDialog.BUTTON_NEUTRAL).setOnClickListener(new View.OnClickListener() {
+                public void onClick(View v) {
+                    takeAll();
+                }
+            });
+            dialogVersion = -1;
+        }
+        if (dialogVersion == Inv.version) return;
+        dialogVersion = Inv.version;
+        dialogTitle.setText(Inv.title.isEmpty() ? "Container" : Inv.title);
+        dialogList.removeAllViews();
+        List<Inv.Item> s = Inv.slots;
+        int n = Inv.containerSize(), shown = 0;
+        for (int i = 0; i < n && i < s.size(); i++) {
+            Inv.Item it = s.get(i);
+            if (it == null) continue;
+            shown++;
+            final int slot = i;
+            LinearLayout r = row(dialogList);
+            r.addView(text(it.name + "  ×" + it.count + (it.detail.isEmpty() ? "" : "\n" + it.detail), 14, TEXT, false),
+                    new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+            Button take = smallButton("Take", ACCENT);
+            take.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(36)));
+            r.addView(take);
+            take.setOnClickListener(new View.OnClickListener() {
+                public void onClick(View v) {
+                    Bot b = Hub.bot;
+                    if (b != null) b.clickSlot(slot, 0, 1);
+                }
+            });
+        }
+        if (shown == 0) dialogList.addView(text(s.isEmpty() ? "Loading contents..." : "This container is empty.", 13, MUTED, false));
+    }
 
     interface Toggle {
         void set(boolean v);
