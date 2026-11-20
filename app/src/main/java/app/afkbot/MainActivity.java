@@ -22,6 +22,7 @@ import android.text.InputType;
 import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
@@ -82,9 +83,14 @@ public class MainActivity extends Activity implements Hub.Listener {
         @Override
         public void run() {
             if (!resumed) return;
-            if (tab == T_3D && view3d != null) {
-                view3d.tick();
-                update3dLifecycle();
+            if (tab == T_3D) {
+                if (view3d != null) view3d.tick();
+                if (view3d == null && cfg.view3d && World.inWorld) update3dLifecycle();
+                info3d.setVisibility(view3d == null || !World.inWorld ? View.VISIBLE : View.GONE);
+                if (Inv.version != shownInvVersion) refreshContainer();
+                if (target != null) updateTarget();
+                Bot b = Hub.bot;
+                if (drive && b != null && !b.manual) setDrive(true);
             }
             if (tab == T_MAP) {
                 radar.invalidate();
@@ -527,53 +533,326 @@ public class MainActivity extends Activity implements Hub.Listener {
 
     private FrameLayout holder3d;
     private World3DView view3d;
-    private TextView info3d;
+    private TextView info3d, targetText;
+    private Button openBtn;
+    private LinearLayout targetBar, driveControls, containerPanel, containerList;
+    private TextView containerTitle;
+    private OverlayView overlay;
     private int radius3d = 16;
+    private boolean firstPerson3d = true, drive;
+    private int shownInvVersion = -1;
+    private volatile int[] target;
 
     private View build3d() {
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
         col.setPadding(dp(12), dp(4), dp(12), dp(8));
-        LinearLayout c = module(col, "3D view", "See the real blocks around you to check you're safe. Drag to orbit, pinch to zoom. Uses the GPU only while this tab is open.", cfg.view3d, new Toggle() {
+        LinearLayout c = module(col, "3D view", "See the real world around you. Tap a block to select it, drive to move, open chests.", cfg.view3d, new Toggle() {
             public void set(boolean v) {
                 cfg.view3d = v;
                 if (v) {
                     Bot b = Hub.bot;
                     if (b != null && !cfg.minimap) b.reloadTerrain();
+                } else {
+                    setDrive(false);
                 }
                 update3dLifecycle();
             }
         });
-        LinearLayout rr = chipRow(c);
-        final TextView[] chips = new TextView[4];
-        final int[] radii = {12, 16, 24, 32};
-        for (int i = 0; i < 4; i++) {
-            final int r = radii[i];
-            final TextView t = text(r + " blocks", 13, TEXT, false);
+        LinearLayout modes = chipRow(c);
+        final TextView fp = text("First person", 13, TEXT, false), orbit = text("Orbit", 13, TEXT, false);
+        for (TextView t : new TextView[]{fp, orbit}) {
             t.setPadding(dp(12), dp(7), dp(12), dp(7));
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             lp.setMargins(0, 0, dp(6), 0);
-            rr.addView(t, lp);
-            chips[i] = t;
-            styleChip(t, ACCENT, r == radius3d);
+            modes.addView(t, lp);
+        }
+        styleChip(fp, ACCENT, firstPerson3d);
+        styleChip(orbit, ACCENT, !firstPerson3d);
+        fp.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                firstPerson3d = true;
+                styleChip(fp, ACCENT, true);
+                styleChip(orbit, ACCENT, false);
+                if (view3d != null) view3d.firstPerson = true;
+            }
+        });
+        orbit.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                firstPerson3d = false;
+                styleChip(fp, ACCENT, false);
+                styleChip(orbit, ACCENT, true);
+                if (view3d != null) view3d.firstPerson = false;
+            }
+        });
+        final TextView[] rchips = new TextView[3];
+        final int[] radii = {12, 16, 24};
+        for (int i = 0; i < 3; i++) {
+            final int r = radii[i];
+            final TextView t = text(r + "m", 13, TEXT, false);
+            t.setPadding(dp(12), dp(7), dp(12), dp(7));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.setMargins(0, 0, dp(6), 0);
+            modes.addView(t, lp);
+            rchips[i] = t;
+            styleChip(t, ACCENT2, r == radius3d);
             t.setOnClickListener(new View.OnClickListener() {
                 public void onClick(View v) {
-                    for (int k = 0; k < 4; k++) styleChip(chips[k], ACCENT, radii[k] == r);
+                    for (int k = 0; k < 3; k++) styleChip(rchips[k], ACCENT2, radii[k] == r);
                     radius3d = r;
                     if (view3d != null) view3d.radius = r;
                 }
             });
         }
+        LinearLayout acts = chipRow(c);
+        final TextView driveChip = text("✥ Drive", 13, TEXT, true);
+        driveChip.setPadding(dp(14), dp(8), dp(14), dp(8));
+        acts.addView(driveChip);
+        styleChip(driveChip, GOOD, false);
+        driveChip.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                setDrive(!drive);
+                styleChip(driveChip, GOOD, drive);
+            }
+        });
+        TextView sp = text(" ", 13, TEXT, false);
+        acts.addView(sp);
+        actionChip(acts, "Inventory", new Runnable() {
+            public void run() {
+                showInventory();
+            }
+        });
+
         holder3d = new FrameLayout(this);
         holder3d.setBackground(round(SURFACE, dp(16), STROKE));
+        holder3d.setClipToOutline(true);
         LinearLayout.LayoutParams hl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1);
-        hl.topMargin = dp(12);
+        hl.topMargin = dp(10);
         col.addView(holder3d, hl);
+
+        overlay = new OverlayView(this);
+        holder3d.addView(overlay, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
         info3d = text("", 13, MUTED, false);
         info3d.setGravity(Gravity.CENTER);
         info3d.setPadding(dp(20), dp(20), dp(20), dp(20));
         holder3d.addView(info3d, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        // selected block bar (top)
+        targetBar = new LinearLayout(this);
+        targetBar.setOrientation(LinearLayout.HORIZONTAL);
+        targetBar.setGravity(Gravity.CENTER_VERTICAL);
+        targetBar.setPadding(dp(12), dp(6), dp(6), dp(6));
+        targetBar.setBackground(round(0xDD0B0D12, dp(12), STROKE));
+        targetText = text("", 13, TEXT, false);
+        targetBar.addView(targetText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        openBtn = smallButton("Open", ACCENT);
+        LinearLayout.LayoutParams ob = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38));
+        openBtn.setLayoutParams(ob);
+        targetBar.addView(openBtn);
+        openBtn.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                int[] t = target;
+                Bot b = Hub.bot;
+                if (t == null || b == null) return;
+                if (World3DView.reach(t) > 4.5) {
+                    toast("Too far - walk within 4.5 blocks (use Drive)");
+                    return;
+                }
+                b.useBlock(t[0], t[1], t[2], t[3]);
+            }
+        });
+        FrameLayout.LayoutParams tl = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP);
+        tl.setMargins(dp(8), dp(8), dp(8), 0);
+        holder3d.addView(targetBar, tl);
+        targetBar.setVisibility(View.GONE);
+
+        // drive controls (bottom)
+        driveControls = new LinearLayout(this);
+        driveControls.setOrientation(LinearLayout.HORIZONTAL);
+        driveControls.setGravity(Gravity.BOTTOM);
+        JoystickView stick = new JoystickView(this);
+        driveControls.addView(stick, new LinearLayout.LayoutParams(dp(130), dp(130)));
+        View spacer = new View(this);
+        driveControls.addView(spacer, new LinearLayout.LayoutParams(0, 1, 1));
+        LinearLayout btns = new LinearLayout(this);
+        btns.setOrientation(LinearLayout.VERTICAL);
+        btns.addView(holdButton("Jump", new Toggle() {
+            public void set(boolean v) {
+                Bot b = Hub.bot;
+                if (b != null) b.inJump = v;
+            }
+        }, false));
+        btns.addView(holdButton("Sneak", new Toggle() {
+            public void set(boolean v) {
+                Bot b = Hub.bot;
+                if (b != null) b.inSneak = v;
+            }
+        }, true));
+        btns.addView(holdButton("Sprint", new Toggle() {
+            public void set(boolean v) {
+                Bot b = Hub.bot;
+                if (b != null) b.inSprint = v;
+            }
+        }, true));
+        driveControls.addView(btns);
+        FrameLayout.LayoutParams dl = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM);
+        dl.setMargins(dp(10), 0, dp(10), dp(10));
+        holder3d.addView(driveControls, dl);
+        driveControls.setVisibility(View.GONE);
+
+        // container panel (bottom sheet)
+        containerPanel = new LinearLayout(this);
+        containerPanel.setOrientation(LinearLayout.VERTICAL);
+        containerPanel.setPadding(dp(12), dp(10), dp(12), dp(10));
+        containerPanel.setBackground(round(0xF2141821, dp(16), ACCENT));
+        LinearLayout ch = row(containerPanel);
+        containerTitle = text("Container", 15, TEXT, true);
+        ch.addView(containerTitle, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        Button takeAll = smallButton("Take all", ACCENT);
+        takeAll.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(36)));
+        ch.addView(takeAll);
+        Button closeC = smallButton("Close", SURFACE2);
+        LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(36));
+        cl.leftMargin = dp(6);
+        closeC.setLayoutParams(cl);
+        ch.addView(closeC);
+        takeAll.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                takeAll();
+            }
+        });
+        closeC.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                Bot b = Hub.bot;
+                if (b != null) b.closeContainer();
+            }
+        });
+        ScrollView cs = new ScrollView(this);
+        containerList = new LinearLayout(this);
+        containerList.setOrientation(LinearLayout.VERTICAL);
+        cs.addView(containerList);
+        containerPanel.addView(cs, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(220)));
+        FrameLayout.LayoutParams pl = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM);
+        pl.setMargins(dp(8), 0, dp(8), dp(8));
+        holder3d.addView(containerPanel, pl);
+        containerPanel.setVisibility(View.GONE);
         return col;
+    }
+
+    private View holdButton(String label, final Toggle t, final boolean toggle) {
+        final TextView b = text(label, 13, TEXT, true);
+        b.setGravity(Gravity.CENTER);
+        b.setBackground(round(0xCC141821, dp(14), STROKE));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(76), dp(44));
+        lp.topMargin = dp(8);
+        b.setLayoutParams(lp);
+        final boolean[] on = {false};
+        b.setOnTouchListener(new View.OnTouchListener() {
+            public boolean onTouch(View v, MotionEvent e) {
+                if (toggle) {
+                    if (e.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                        on[0] = !on[0];
+                        t.set(on[0]);
+                        b.setBackground(round(on[0] ? (ACCENT & 0x00FFFFFF) | 0xCC000000 : 0xCC141821, dp(14), on[0] ? ACCENT : STROKE));
+                    }
+                } else {
+                    if (e.getActionMasked() == MotionEvent.ACTION_DOWN) t.set(true);
+                    if (e.getActionMasked() == MotionEvent.ACTION_UP || e.getActionMasked() == MotionEvent.ACTION_CANCEL) t.set(false);
+                    b.setBackground(round(e.getActionMasked() == MotionEvent.ACTION_DOWN ? (ACCENT & 0x00FFFFFF) | 0xCC000000 : 0xCC141821, dp(14), STROKE));
+                }
+                return true;
+            }
+        });
+        return b;
+    }
+
+    private void setDrive(boolean on) {
+        drive = on;
+        Bot b = Hub.bot;
+        if (b != null) {
+            if (on) {
+                b.lookYaw = World.selfYaw;
+                if (view3d != null) {
+                    view3d.fpYaw = b.lookYaw;
+                    view3d.fpPitch = b.lookPitch;
+                }
+            } else {
+                b.inForward = b.inStrafe = 0;
+                b.inJump = false;
+            }
+            b.manual = on;
+        }
+        if (on && !World.inWorld) toast("Start AFK first");
+        if (driveControls != null) driveControls.setVisibility(on && view3d != null ? View.VISIBLE : View.GONE);
+        if (view3d != null) view3d.setContinuous(on);
+        if (on) Hub.log("Drive mode on - anti-AFK pauses while you control the player");
+    }
+
+    private void takeAll() {
+        Bot b = Hub.bot;
+        if (b == null) return;
+        List<Inv.Item> s = Inv.slots;
+        int n = Inv.containerSize(), delay = 0;
+        for (int i = 0; i < n && i < s.size(); i++) {
+            if (s.get(i) == null) continue;
+            final int slot = i;
+            ui.postDelayed(new Runnable() {
+                public void run() {
+                    Bot bb = Hub.bot;
+                    if (bb != null && Inv.openId >= 0) bb.clickSlot(slot, 0, 1);
+                }
+            }, delay);
+            delay += 150;
+        }
+    }
+
+    private void refreshContainer() {
+        shownInvVersion = Inv.version;
+        boolean open = Inv.openId >= 0 && view3d != null;
+        containerPanel.setVisibility(open ? View.VISIBLE : View.GONE);
+        if (!open) return;
+        containerTitle.setText(Inv.title.isEmpty() ? "Container" : Inv.title);
+        containerList.removeAllViews();
+        List<Inv.Item> s = Inv.slots;
+        int n = Inv.containerSize(), shown = 0;
+        for (int i = 0; i < n && i < s.size(); i++) {
+            Inv.Item it = s.get(i);
+            if (it == null) continue;
+            shown++;
+            final int slot = i;
+            LinearLayout r = row(containerList);
+            TextView t = text(it.name + "  ×" + it.count + (it.detail.isEmpty() ? "" : "\n" + it.detail), 13, TEXT, false);
+            r.addView(t, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+            Button take = smallButton("Take", SURFACE2);
+            take.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(34)));
+            r.addView(take);
+            take.setOnClickListener(new View.OnClickListener() {
+                public void onClick(View v) {
+                    Bot b = Hub.bot;
+                    if (b != null) b.clickSlot(slot, 0, 1);
+                }
+            });
+        }
+        if (shown == 0) containerList.addView(text(s.isEmpty() ? "Loading..." : "Empty.", 13, MUTED, false));
+    }
+
+    private void showInventory() {
+        List<Inv.Item> inv = Inv.inventory;
+        StringBuilder sb = new StringBuilder();
+        String[] area = new String[46];
+        for (int i = 0; i < 46; i++) area[i] = i < 5 ? "Crafting" : i < 9 ? "Armor" : i < 36 ? "Backpack" : i < 45 ? "Hotbar" : "Off-hand";
+        String last = "";
+        for (int i = 0; i < inv.size() && i < 46; i++) {
+            Inv.Item it = inv.get(i);
+            if (it == null) continue;
+            if (!area[i].equals(last)) {
+                sb.append(sb.length() > 0 ? "\n" : "").append(area[i]).append('\n');
+                last = area[i];
+            }
+            sb.append("  ").append(it.name).append(" ×").append(it.count).append(it.detail.isEmpty() ? "" : "  (" + it.detail + ")").append('\n');
+        }
+        showText("Inventory", sb.length() == 0 ? (World.inWorld ? "Your inventory is empty (or not sent yet)." : "Start AFK first.") : sb.toString());
     }
 
     /** Creates the GL view only while the 3D tab is visible and switched on; destroys it otherwise. */
@@ -583,16 +862,159 @@ public class MainActivity extends Activity implements Hub.Listener {
         if (want && view3d == null) {
             view3d = new World3DView(this);
             view3d.radius = radius3d;
+            view3d.firstPerson = firstPerson3d;
+            view3d.fpYaw = World.selfYaw;
+            Bot b = Hub.bot;
+            if (b != null) view3d.fpPitch = b.lookPitch;
+            view3d.listener = new World3DView.Listener() {
+                public void onSelect(final int[] block) {
+                    target = block;
+                    ui.post(new Runnable() {
+                        public void run() {
+                            updateTarget();
+                        }
+                    });
+                }
+
+                public void onLabels(List<Object[]> labels) {
+                    overlay.setLabels(labels);
+                }
+
+                public void onLook(float yaw, float pitch) {
+                    Bot b = Hub.bot;
+                    if (b != null) {
+                        b.lookYaw = yaw;
+                        b.lookPitch = pitch;
+                    }
+                }
+            };
             holder3d.addView(view3d, 0, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            view3d.setContinuous(drive);
             view3d.tick();
         } else if (!want && view3d != null) {
             view3d.onPause();
             holder3d.removeView(view3d);
             view3d = null;
+            if (drive && tab != T_3D) setDrive(false);
         }
+        overlay.crosshair = view3d != null && firstPerson3d;
         boolean showInfo = view3d == null || !World.inWorld;
         info3d.setText(!cfg.view3d ? "3D view is off. Turn it on above." : !World.inWorld ? "Start AFK to see the world around you." : "");
         info3d.setVisibility(showInfo ? View.VISIBLE : View.GONE);
+        driveControls.setVisibility(drive && view3d != null ? View.VISIBLE : View.GONE);
+        if (view3d == null) targetBar.setVisibility(View.GONE);
+        refreshContainer();
+    }
+
+    private void updateTarget() {
+        int[] t = target;
+        if (t == null || view3d == null) {
+            targetBar.setVisibility(View.GONE);
+            return;
+        }
+        String name = "Block";
+        ProtoDef.VersionData vd = Hub.versionData;
+        int st = MapData.stateAt(t[0], t[1], t[2]);
+        if (vd != null && st > 0) name = vd.blockName(st);
+        double r = World3DView.reach(t);
+        targetText.setText(String.format(Locale.US, "%s  •  %d, %d, %d  •  %.1f m%s", name, t[0], t[1], t[2], r, r > 4.5 ? "  (too far to open)" : ""));
+        Bot b = Hub.bot;
+        openBtn.setVisibility(b != null && b.containersSupported() ? View.VISIBLE : View.GONE);
+        openBtn.setAlpha(r <= 4.5 ? 1f : 0.45f);
+        targetBar.setVisibility(View.VISIBLE);
+    }
+
+    /** Joystick: up = forward, sideways = strafe. */
+    private final class JoystickView extends View {
+        private final android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        private float kx, ky;
+
+        JoystickView(android.content.Context c) {
+            super(c);
+        }
+
+        @Override
+        protected void onDraw(android.graphics.Canvas c) {
+            float cx = getWidth() / 2f, cy = getHeight() / 2f, r = Math.min(cx, cy) - dp(4);
+            p.setColor(0x660B0D12);
+            c.drawCircle(cx, cy, r, p);
+            p.setStyle(android.graphics.Paint.Style.STROKE);
+            p.setStrokeWidth(dp(2));
+            p.setColor(0x88FFFFFF);
+            c.drawCircle(cx, cy, r, p);
+            p.setStyle(android.graphics.Paint.Style.FILL);
+            p.setColor(ACCENT);
+            c.drawCircle(cx + kx * r * 0.6f, cy + ky * r * 0.6f, r * 0.38f, p);
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent e) {
+            if (getParent() != null) getParent().requestDisallowInterceptTouchEvent(true);
+            float cx = getWidth() / 2f, cy = getHeight() / 2f, r = Math.min(cx, cy) * 0.6f;
+            if (e.getActionMasked() == MotionEvent.ACTION_UP || e.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+                kx = ky = 0;
+            } else {
+                kx = (e.getX() - cx) / r;
+                ky = (e.getY() - cy) / r;
+                float len = (float) Math.sqrt(kx * kx + ky * ky);
+                if (len > 1) {
+                    kx /= len;
+                    ky /= len;
+                }
+            }
+            Bot b = Hub.bot;
+            if (b != null) {
+                b.inForward = Math.abs(ky) < 0.15f ? 0 : -ky;
+                b.inStrafe = Math.abs(kx) < 0.15f ? 0 : -kx;
+            }
+            invalidate();
+            return true;
+        }
+    }
+
+    /** Draws name tags and the crosshair on top of the 3D view. */
+    private final class OverlayView extends View {
+        private final android.graphics.Paint tp = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        private final android.graphics.Paint bg = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        private volatile List<Object[]> labels = new java.util.ArrayList<Object[]>();
+        boolean crosshair;
+        private long lastPost;
+
+        OverlayView(android.content.Context c) {
+            super(c);
+            tp.setTextSize(dp(12));
+            tp.setTypeface(Typeface.DEFAULT_BOLD);
+            tp.setTextAlign(android.graphics.Paint.Align.CENTER);
+            bg.setColor(0x99000000);
+        }
+
+        void setLabels(List<Object[]> l) {
+            labels = l;
+            long now = System.currentTimeMillis();
+            if (now - lastPost > 60) {
+                lastPost = now;
+                postInvalidate();
+            }
+        }
+
+        @Override
+        protected void onDraw(android.graphics.Canvas c) {
+            if (view3d == null) return;
+            for (Object[] l : labels) {
+                float x = (Float) l[0], y = (Float) l[1];
+                String s = (String) l[2];
+                float w = tp.measureText(s) / 2 + dp(6);
+                c.drawRoundRect(x - w, y - dp(15), x + w, y + dp(4), dp(6), dp(6), bg);
+                tp.setColor(0xFF000000 | (Integer) l[3]);
+                c.drawText(s, x, y, tp);
+            }
+            if (crosshair) {
+                float cx = getWidth() / 2f, cy = getHeight() / 2f;
+                tp.setColor(0xCCFFFFFF);
+                c.drawRect(cx - dp(8), cy - dp(1), cx + dp(8), cy + dp(1), tp);
+                c.drawRect(cx - dp(1), cy - dp(8), cx + dp(1), cy + dp(8), tp);
+            }
+        }
     }
 
     private void updateViewLabel() {

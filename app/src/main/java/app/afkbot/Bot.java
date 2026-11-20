@@ -126,6 +126,16 @@ final class Bot {
     private int sneakTicks;
     private volatile boolean batchPending;
     private volatile String pendingLogout;
+    private ProtoDef.VersionData vdata;
+    private int useSequence;
+
+    // ---- manual control (3D tab) ----
+    /** True while you drive the player from the 3D tab (anti-AFK pauses). */
+    volatile boolean manual;
+    volatile float inForward, inStrafe, lookYaw, lookPitch;
+    volatile boolean inJump, inSneak, inSprint;
+    private boolean onGroundM = true, wasSneak, wasSprint, inWater;
+    private double vxM, vyM, vzM;
     private float lastHealthEvent = -1;
     private volatile int state;
     private int threshold = -1;
@@ -292,6 +302,8 @@ final class Bot {
 
     private void cleanup() {
         pendingLogout = null;
+        Inv.reset();
+        manual = false;
         lastHealthEvent = -1;
         if (ticker != null) {
             ticker.shutdownNow();
@@ -395,6 +407,16 @@ final class Bot {
             proto = serverProto;
         }
         ids = Proto.IDS[idx];
+        vdata = null;
+        Hub.VersionLoader vl = Hub.versionLoader;
+        if (vl != null && Proto.PROTOCOLS[idx] >= 764) {
+            try {
+                vdata = vl.load(Proto.PROTOCOLS[idx]);
+                Hub.versionData = vdata;
+            } catch (Exception e) {
+                Hub.log("Container support unavailable: " + e.getMessage());
+            }
+        }
         MapData.setVersion(idx, serverProto > 0 ? Math.min(proto, Proto.PROTOCOLS[Proto.PROTOCOLS.length - 1]) : proto);
         playerType = Proto.PLAYER_TYPE[idx];
         kinds = Proto.ENTITY_KINDS[idx];
@@ -838,10 +860,158 @@ final class Bot {
             for (int i = 0; i < n; i++) World.removeName(p.uuid());
         } else if (pid == id(Proto.P_C_PLAYER_CHAT)) {
             readPlayerChat(p);
+        } else if (pid == id(Proto.P_C_BLOCK_CHANGE)) {
+            long v = p.i64();
+            int bx = (int) (v >> 38), by = (int) (v << 52 >> 52), bz = (int) (v << 26 >> 38);
+            MapData.setBlock(bx, by, bz, p.varInt());
+        } else if (pid == id(Proto.P_C_MULTI_BLOCK)) {
+            long v = p.i64();
+            int sx = (int) (v >> 42), sz = (int) (v << 22 >> 42), sy = (int) (v << 44 >> 44);
+            int n = p.varInt();
+            for (int i = 0; i < n; i++) {
+                long rec = readVarLong(p);
+                int st = (int) (rec >>> 12);
+                int lx = (int) ((rec >> 8) & 15), lz = (int) ((rec >> 4) & 15), ly = (int) (rec & 15);
+                MapData.setBlock(sx * 16 + lx, sy * 16 + ly, sz * 16 + lz, st);
+            }
+        } else if (pid == id(Proto.P_C_OPEN_WINDOW) && vdata != null) {
+            java.util.Map<String, Object> m = vdata.readPacket("open_window", p);
+            Object t = m.get("windowTitle");
+            Inv.title = t instanceof String && ((String) t).startsWith("{") ? Text.fromJson((String) t) : Text.strip(Text.flatten(t));
+            Inv.openId = Inv.num(m.get("windowId"));
+            Inv.slots = new java.util.ArrayList<Inv.Item>();
+            Inv.status = "";
+            Inv.version++;
+            Hub.log("Opened " + (Inv.title.isEmpty() ? "container" : Inv.title));
+        } else if (pid == id(Proto.P_C_WINDOW_ITEMS) && vdata != null) {
+            java.util.Map<String, Object> m = vdata.readPacket("window_items", p);
+            int wid = Inv.num(m.get("windowId"));
+            java.util.List<Inv.Item> list = new java.util.ArrayList<Inv.Item>();
+            Object items = m.get("items");
+            if (items instanceof java.util.List) for (Object o : (java.util.List<?>) items) list.add(Inv.fromSlot(o, vdata));
+            Inv.stateId = Inv.num(m.get("stateId"));
+            if (wid == 0) Inv.inventory = list;
+            else if (wid == Inv.openId) Inv.slots = list;
+            Inv.version++;
+        } else if (pid == id(Proto.P_C_SET_SLOT) && vdata != null) {
+            java.util.Map<String, Object> m = vdata.readPacket("set_slot", p);
+            int wid = Inv.num(m.get("windowId")), slot = Inv.num(m.get("slot"));
+            Inv.stateId = Inv.num(m.get("stateId"));
+            java.util.List<Inv.Item> target = wid == 0 ? Inv.inventory : wid == Inv.openId ? Inv.slots : null;
+            if (target != null && slot >= 0 && slot < target.size()) {
+                java.util.List<Inv.Item> copy = new java.util.ArrayList<Inv.Item>(target);
+                copy.set(slot, Inv.fromSlot(m.get("item"), vdata));
+                if (wid == 0) Inv.inventory = copy;
+                else Inv.slots = copy;
+                Inv.version++;
+            }
+        } else if (pid == id(Proto.P_C_CLOSE_WINDOW)) {
+            Inv.openId = -1;
+            Inv.version++;
         } else {
             return false;
         }
         return true;
+    }
+
+    private static long readVarLong(Buf.In p) throws IOException {
+        long v = 0;
+        int shift = 0, b;
+        do {
+            b = p.u8();
+            v |= (long) (b & 0x7F) << shift;
+            shift += 7;
+        } while ((b & 0x80) != 0 && shift < 70);
+        return v;
+    }
+
+    // ----- interacting with blocks and containers -----
+
+    private static long packPos(int x, int y, int z) {
+        return ((long) (x & 0x3FFFFFF) << 38) | ((long) (z & 0x3FFFFFF) << 12) | (y & 0xFFF);
+    }
+
+    private void writeContainerId(Buf b, int id) {
+        if (proto >= 768) b.varInt(id);
+        else b.u8(id);
+    }
+
+    /** Right-clicks a block (opens chests, barrels, shulkers, doors...). face: 0 down 1 up 2 north 3 south 4 west 5 east. */
+    void useBlock(final int bx, final int by, final int bz, final int face) {
+        final ScheduledExecutorService t = ticker;
+        if (t == null || state != PLAY || id(Proto.P_S_USE_ITEM_ON) < 0) return;
+        t.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    // look at the block first, like a real client
+                    synchronized (Bot.this) {
+                        double ex = x, ey = y + 1.62, ez = z;
+                        double dx = bx + 0.5 - ex, dy = by + 0.5 - ey, dz = bz + 0.5 - ez;
+                        yaw = (float) Math.toDegrees(Math.atan2(-dx, dz));
+                        pitch = (float) -Math.toDegrees(Math.atan2(dy, Math.sqrt(dx * dx + dz * dz)));
+                        lookYaw = yaw;
+                        lookPitch = pitch;
+                    }
+                    sendMove(true, true, onGroundM);
+                    send(new Buf(id(Proto.P_S_SWING)).varInt(0));
+                    Buf b = new Buf(id(Proto.P_S_USE_ITEM_ON)).varInt(0).i64(packPos(bx, by, bz)).varInt(face)
+                            .f32(0.5f).f32(face == 1 ? 1f : 0.5f).f32(0.5f).bool(false);
+                    if (proto >= 768) b.bool(false);
+                    b.varInt(++useSequence);
+                    send(b);
+                    Inv.status = "Opening...";
+                    Inv.version++;
+                } catch (IOException ignored) {
+                }
+            }
+        });
+    }
+
+    /** Clicks a slot in the open container. mode 1 + button 0 = shift-click (moves the stack across). */
+    void clickSlot(final int slot, final int button, final int mode) {
+        final ScheduledExecutorService t = ticker;
+        final int wid = Inv.openId;
+        if (t == null || state != PLAY || wid < 0) return;
+        t.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Buf b = new Buf(id(Proto.P_S_WINDOW_CLICK));
+                    writeContainerId(b, wid);
+                    b.varInt(Inv.stateId).u16(slot).u8(button).varInt(mode).varInt(0); // no predicted changes
+                    // carried item: empty (server works out the result and sends the new contents)
+                    if (proto >= 770) b.bool(false);
+                    else if (proto >= 766) b.varInt(0);
+                    else b.bool(false);
+                    send(b);
+                } catch (IOException ignored) {
+                }
+            }
+        });
+    }
+
+    void closeContainer() {
+        final ScheduledExecutorService t = ticker;
+        final int wid = Inv.openId;
+        Inv.openId = -1;
+        Inv.version++;
+        if (t == null || wid < 0) return;
+        t.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Buf b = new Buf(id(Proto.P_S_CLOSE_WINDOW));
+                    writeContainerId(b, wid);
+                    send(b);
+                } catch (IOException ignored) {
+                }
+            }
+        });
+    }
+
+    boolean containersSupported() {
+        return vdata != null && id(Proto.P_S_WINDOW_CLICK) >= 0;
     }
 
     private static final java.util.regex.Pattern CHAT_LINE = java.util.regex.Pattern.compile("^<([A-Za-z0-9_]{1,16})> (.*)$");
@@ -1056,6 +1226,9 @@ final class Bot {
             pitch = (flags & 0x10) != 0 ? pitch + npitch : npitch;
             groundY = y;
             jumping = false;
+            vxM = vyM = vzM = 0;
+            lookYaw = yaw;
+            lookPitch = pitch;
             first = !havePos;
             World.selfX = x;
             World.selfY = y;
@@ -1107,7 +1280,13 @@ final class Bot {
             if (!havePos || respawnPending) return;
             tick++;
             long now = System.currentTimeMillis();
-            if (jumping) {
+            if (manual) {
+                jumping = false;
+                ground = physicsStep();
+                groundY = y;
+                doMove = true;
+                nextJumpAt = now + nextAfkDelaySeconds() * 1000L; // anti-AFK waits while you drive
+            } else if (jumping) {
                 y += vy;
                 vy = (vy - 0.08) * 0.98;
                 if (y <= groundY) {
@@ -1145,13 +1324,178 @@ final class Bot {
             if (cfg.afkSwing) send(new Buf(id(Proto.P_S_SWING)).varInt(0));
             if (cfg.afkSneak) setSneak(true);
             sendMove(true, true, true);
+        } else if (doMove && manual) {
+            sendMove(true, true, ground);
         } else if (doMove) {
             sendMove(true, false, ground);
         }
-        if (sneakTicks > 0 && --sneakTicks == 0) setSneak(false);
+        if (manual) {
+            if (inSneak != wasSneak) {
+                wasSneak = inSneak;
+                setSneak(inSneak);
+                sneakTicks = 0;
+            }
+            if (inSprint != wasSprint && id(Proto.P_S_ENTITY_ACTION) >= 0 && selfEntityId != Integer.MIN_VALUE) {
+                wasSprint = inSprint;
+                int act = proto >= 771 ? (inSprint ? 1 : 2) : (inSprint ? 3 : 4);
+                send(new Buf(id(Proto.P_S_ENTITY_ACTION)).varInt(selfEntityId).varInt(act).varInt(0));
+            }
+        } else if (wasSneak || wasSprint) {
+            if (wasSneak) setSneak(false);
+            wasSneak = false;
+            wasSprint = false;
+        }
+        if (sneakTicks > 0 && --sneakTicks == 0 && !manual) setSneak(false);
         if (detail) updateDetail();
         if (tick % 20 == 0) ModEngine.emit("second", null);
         if (tick % 200 == 0) MapData.trim(World.selfX, World.selfZ, Math.max(cfg.viewDistance, Hub.serverViewDistance) + 3);
+    }
+
+    // ===================================================================================
+    // Movement physics (close to vanilla) for driving the player from the 3D tab
+    // ===================================================================================
+
+    private static final double W = 0.3, H = 1.8, STEP = 0.6;
+
+    /** One 50 ms tick of walking physics. Must hold the lock. Returns onGround. */
+    private boolean physicsStep() {
+        yaw = lookYaw;
+        pitch = Math.max(-90, Math.min(90, lookPitch));
+        float f = inForward, s = inStrafe;
+        if (inSneak) {
+            f *= 0.3f;
+            s *= 0.3f;
+        }
+        inWater = (MapData.flagsAt((int) Math.floor(x), (int) Math.floor(y + 0.4), (int) Math.floor(z)) & 2) != 0;
+        boolean sprint = inSprint && f > 0 && !inSneak;
+        double speed = 0.1 * (sprint ? 1.3 : 1.0);
+        double slip = onGroundM ? 0.6 * 0.91 : 0.91;
+        double accel = inWater ? 0.02 : onGroundM ? speed * (0.21600002 / (slip * slip * slip)) : (sprint ? 0.026 : 0.02);
+        double len = f * f + s * s;
+        if (len >= 1.0E-4) {
+            len = Math.sqrt(len);
+            if (len < 1) len = 1;
+            double ff = f / len * accel, ss = s / len * accel;
+            double sin = Math.sin(Math.toRadians(yaw)), cos = Math.cos(Math.toRadians(yaw));
+            vxM += ss * cos - ff * sin;
+            vzM += ff * cos + ss * sin;
+        }
+        if (inJump) {
+            if (inWater) vyM += 0.04;
+            else if (onGroundM) {
+                vyM = 0.42;
+                if (sprint) {
+                    vxM += -Math.sin(Math.toRadians(yaw)) * 0.2;
+                    vzM += Math.cos(Math.toRadians(yaw)) * 0.2;
+                }
+            }
+        }
+        // sneaking stops you walking off edges
+        if (inSneak && onGroundM) {
+            if (!groundBelow(x + vxM, z)) vxM = 0;
+            if (!groundBelow(x, z + vzM)) vzM = 0;
+        }
+        move(vxM, vyM, vzM);
+        if (inWater) {
+            vyM = vyM * 0.8 - 0.02;
+            vxM *= 0.8;
+            vzM *= 0.8;
+        } else {
+            vyM = (vyM - 0.08) * 0.98;
+            vxM *= slip;
+            vzM *= slip;
+        }
+        if (Math.abs(vxM) < 0.003) vxM = 0;
+        if (Math.abs(vzM) < 0.003) vzM = 0;
+        return onGroundM;
+    }
+
+    private boolean groundBelow(double px, double pz) {
+        return collides(px - W, y - 0.6, pz - W, px + W, y - 0.01, pz + W);
+    }
+
+    private static boolean solid(int bx, int by, int bz) {
+        return (MapData.flagsAt(bx, by, bz) & 1) != 0;
+    }
+
+    private static boolean collides(double x0, double y0, double z0, double x1, double y1, double z1) {
+        for (int bx = (int) Math.floor(x0); bx <= (int) Math.floor(x1 - 1e-7); bx++)
+            for (int by = (int) Math.floor(y0); by <= (int) Math.floor(y1 - 1e-7); by++)
+                for (int bz = (int) Math.floor(z0); bz <= (int) Math.floor(z1 - 1e-7); bz++)
+                    if (solid(bx, by, bz)) return true;
+        return false;
+    }
+
+    /** Moves with collision: Y first, then X and Z, with step-up onto blocks up to 0.6 high. */
+    private void move(double dx, double dy, double dz) {
+        double ox = x, oy = y, oz = z;
+        double ny = sweep(1, dy);
+        boolean hitY = ny != dy;
+        y += ny;
+        onGroundM = hitY && dy < 0;
+        if (hitY) vyM = 0;
+        double nx = sweep(0, dx);
+        x += nx;
+        double nz = sweep(2, dz);
+        z += nz;
+        boolean hitH = nx != dx || nz != dz;
+        if (hitH && (onGroundM || dy < 0 && oy - y < 0.01) && !inWater) {
+            // try stepping up
+            double sx = x, sy = y, sz = z;
+            x = ox;
+            z = oz;
+            y = oy;
+            double up = sweep(1, STEP);
+            y += up;
+            double sx2 = sweep(0, dx);
+            x += sx2;
+            double sz2 = sweep(2, dz);
+            z += sz2;
+            double down = sweep(1, -up - 0.01);
+            y += down;
+            double gained = Math.abs(x - ox) + Math.abs(z - oz);
+            if (gained > Math.abs(sx - ox) + Math.abs(sz - oz) + 1e-4) {
+                onGroundM = true;
+                nx = sx2;
+                nz = sz2;
+            } else {
+                x = sx;
+                y = sy;
+                z = sz;
+            }
+        }
+        if (nx != dx) vxM = 0;
+        if (nz != dz) vzM = 0;
+    }
+
+    /** How far we can move along an axis (0 x, 1 y, 2 z) before hitting a solid block (vanilla-style AABB clipping). */
+    private double sweep(int axis, double d) {
+        if (d == 0) return 0;
+        double[] lo = {x - W, y, z - W}, hi = {x + W, y + H, z + W};
+        // the area swept by the box along the axis
+        double[] slo = lo.clone(), shi = hi.clone();
+        if (d > 0) shi[axis] += d;
+        else slo[axis] += d;
+        int x0 = (int) Math.floor(slo[0]), x1 = (int) Math.floor(shi[0] - 1e-7);
+        int y0 = (int) Math.floor(slo[1]), y1 = (int) Math.floor(shi[1] - 1e-7);
+        int z0 = (int) Math.floor(slo[2]), z1 = (int) Math.floor(shi[2] - 1e-7);
+        if ((long) (x1 - x0 + 1) * (y1 - y0 + 1) * (z1 - z0 + 1) > 4000) return 0; // absurd move, refuse
+        for (int bx = x0; bx <= x1; bx++)
+            for (int by = y0; by <= y1; by++)
+                for (int bz = z0; bz <= z1; bz++) {
+                    if (!solid(bx, by, bz)) continue;
+                    double[] b0 = {bx, by, bz}, b1 = {bx + 1, by + 1, bz + 1};
+                    // must overlap on the other two axes
+                    boolean overlap = true;
+                    for (int a = 0; a < 3; a++) {
+                        if (a == axis) continue;
+                        if (hi[a] <= b0[a] + 1e-7 || lo[a] >= b1[a] - 1e-7) overlap = false;
+                    }
+                    if (!overlap) continue;
+                    if (d > 0 && b0[axis] >= hi[axis] - 1e-7) d = Math.min(d, b0[axis] - hi[axis]);
+                    else if (d < 0 && b1[axis] <= lo[axis] + 1e-7) d = Math.max(d, b1[axis] - lo[axis]);
+                }
+        return d;
     }
 
     private void setSneak(boolean on) throws IOException {
@@ -1287,6 +1631,8 @@ final class Bot {
                 Proto.P_C_PLAYER_INFO, Proto.P_C_PLAYER_REMOVE, Proto.P_C_PLAYER_CHAT};
         for (int k : want) if (ids[k] == pid) return true;
         if (MapData.supported && (pid == id(Proto.P_C_MAP_CHUNK) || pid == id(Proto.P_C_UNLOAD_CHUNK))) return true;
+        if (pid == id(Proto.P_C_BLOCK_CHANGE) || pid == id(Proto.P_C_MULTI_BLOCK) || pid == id(Proto.P_C_WINDOW_ITEMS)
+                || pid == id(Proto.P_C_SET_SLOT) || pid == id(Proto.P_C_OPEN_WINDOW) || pid == id(Proto.P_C_CLOSE_WINDOW)) return true;
         return pid == id(Proto.P_C_CHUNK_BATCH_FINISHED);
     }
 

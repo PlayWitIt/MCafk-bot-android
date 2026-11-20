@@ -19,7 +19,9 @@ Get **AFKBot.apk** from the [latest release](../../releases/tag/latest) and open
   - Visual Range: alert when a player comes into view
   - Auto Respawn, Auto Reconnect, Friends list
 - **Map**: drag to pan, pinch/+/- to zoom, double-tap or ⌖ to re-centre; Surface or **Layer (Y level)** view to see caves and bases
-- **3D view** tab (off by default): coloured blocks around you plus players/mobs, drag to orbit; uses the GPU only while open
+- **3D view** tab (off by default): first-person or orbit camera, shaded blocks with ambient occlusion, players with name tags;
+  **Drive** mode with joystick, jump, sneak and sprint (vanilla-style physics and collisions); tap a block to select it and
+  **open chests/barrels/shulkers**, see their contents and take items; inventory viewer. Uses the GPU only while open.
 - **Mods**: JavaScript add-ons (sandboxed) installed from examples, a file, pasted code or a link — see [MODS.md](MODS.md)
 - **Chat**: read server and player chat; send messages and /commands
 - **Alerts**: phone notifications for kicks, disconnects, deaths, players nearby and safety logouts

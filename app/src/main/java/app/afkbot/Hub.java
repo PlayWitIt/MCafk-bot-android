@@ -41,6 +41,15 @@ final class Hub {
     static volatile String statPos = "-", statUptime = "-", statNextAction = "-", statNearest = "none";
     static volatile int statActions;
     static volatile int serverViewDistance;
+
+    interface VersionLoader {
+        ProtoDef.VersionData load(int protocol) throws Exception;
+    }
+
+    /** Loads per-version item/container definitions (set by the app). */
+    static volatile VersionLoader versionLoader;
+    /** Data for the connected server's version (block/item names), or null. */
+    static volatile ProtoDef.VersionData versionData;
     /** The running bot (for sending chat), or null. */
     static volatile Bot bot;
     static volatile Bot.Config config;

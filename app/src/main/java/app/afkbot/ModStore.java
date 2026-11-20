@@ -24,6 +24,12 @@ final class ModStore {
         initialised = true;
         final Context app = ctx.getApplicationContext();
         ModEngine.host = new Host(app);
+        Hub.versionLoader = new Hub.VersionLoader() {
+            @Override
+            public ProtoDef.VersionData load(int protocol) throws Exception {
+                return ProtoDef.load(app.getAssets().open("proto/" + protocol + ".json.gz"));
+            }
+        };
         File[] files = dir(app).listFiles();
         if (files == null) return;
         java.util.Arrays.sort(files);

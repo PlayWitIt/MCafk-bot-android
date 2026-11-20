@@ -32,6 +32,7 @@ final class MapData {
     static volatile String status = "";
     private static int[] minStates = new int[0];
     private static int[] blockColor = new int[0];
+    private static int[] blockFlags = new int[0]; // 1 = solid (full collision box), 2 = fluid
     /** Paletted containers have a length prefix before their data array (versions before 1.21.5). */
     private static boolean lengthPrefix = true;
     static volatile int minY = -64;
@@ -57,17 +58,20 @@ final class MapData {
     /** Called once per connection with the table for the server's version. */
     static void setVersion(int tableIdx, int proto) {
         String t = Proto.BLOCKS[tableIdx];
-        int n = t.length() / 2;
-        minStates = new int[n];
-        blockColor = new int[n];
+        int n = t.length() / 3;
+        int[] ms = new int[n], bc = new int[n], bf = new int[n];
         int s = 0;
         for (int i = 0; i < n; i++) {
-            s += t.charAt(i * 2) - 32;
-            minStates[i] = s;
-            blockColor[i] = Proto.COLORS[t.charAt(i * 2 + 1) - 32];
+            s += t.charAt(i * 3) - 32;
+            ms[i] = s;
+            bc[i] = Proto.COLORS[t.charAt(i * 3 + 1) - 32];
+            bf[i] = t.charAt(i * 3 + 2) - 32;
         }
+        minStates = ms;
+        blockColor = bc;
+        blockFlags = bf;
         lengthPrefix = proto < 770;
-        int[] cache = new int[n > 0 ? minStates[n - 1] + 4096 : 0];
+        int[] cache = new int[n > 0 ? ms[n - 1] + 4096 : 0];
         Arrays.fill(cache, -2);
         stateCache = cache;
         supported = n > 0;
@@ -93,6 +97,73 @@ final class MapData {
             return v;
         }
         return lookupColor(state);
+    }
+
+    private static int blockIndex(int state) {
+        int i = Arrays.binarySearch(minStates, state);
+        if (i < 0) i = -i - 2;
+        return i;
+    }
+
+    /** Block flags at a world position: 1 solid, 2 fluid, 0 passable; unloaded chunks count as solid. */
+    static int flagsAt(int wx, int wy, int wz) {
+        Chunk c = CHUNKS.get(key(wx >> 4, wz >> 4));
+        if (c == null || c.secs == null) return 1;
+        int y = wy - minY;
+        if (y < 0 || y >= c.secs.length * 16) return 0;
+        int st = blockAt(c.secs, wx & 15, y, wz & 15);
+        if (st <= 0) return 0;
+        int i = blockIndex(st);
+        return i >= 0 && i < blockFlags.length ? blockFlags[i] : 1;
+    }
+
+    /** Raw block state at a world position, or -1 if unknown. */
+    static int stateAt(int wx, int wy, int wz) {
+        Chunk c = CHUNKS.get(key(wx >> 4, wz >> 4));
+        if (c == null || c.secs == null) return -1;
+        int y = wy - minY;
+        if (y < 0 || y >= c.secs.length * 16) return 0;
+        return blockAt(c.secs, wx & 15, y, wz & 15);
+    }
+
+    static boolean loaded(int wx, int wz) {
+        Chunk c = CHUNKS.get(key(wx >> 4, wz >> 4));
+        return c != null && c.secs != null;
+    }
+
+    /** Applies a block change from the server and updates that column's map colour. */
+    static void setBlock(int wx, int wy, int wz, int state) {
+        Chunk c = CHUNKS.get(key(wx >> 4, wz >> 4));
+        if (c == null || c.secs == null) return;
+        int y = wy - minY;
+        int si = y >> 4;
+        if (y < 0 || si >= c.secs.length) return;
+        Section s = c.secs[si];
+        if (s.direct == null) {
+            int[] d = new int[4096];
+            for (int ly = 0; ly < 16; ly++)
+                for (int lz = 0; lz < 16; lz++)
+                    for (int lx = 0; lx < 16; lx++)
+                        d[(ly * 16 + lz) * 16 + lx] = blockAt(c.secs, lx, si * 16 + ly, lz);
+            s.direct = d;
+        }
+        int lx = wx & 15, lz = wz & 15;
+        s.direct[((y & 15) * 16 + lz) * 16 + lx] = state;
+        // recompute the surface colour of this column
+        int i = lz * 16 + lx, col = 0, top = 0;
+        int start = nether ? Math.min((int) Math.floor(World.selfY) - minY + 1, c.secs.length * 16 - 1) : c.secs.length * 16 - 1;
+        for (int yy = start; yy >= 0; yy--) {
+            int k = colorOfState(blockAt(c.secs, lx, yy, lz));
+            if (k != 0) {
+                col = k == WATER ? waterShade(c.secs, lx, yy, lz) : k;
+                top = yy;
+                break;
+            }
+        }
+        c.color[i] = col;
+        c.height[i] = (short) top;
+        c.layerY = Integer.MIN_VALUE;
+        version++;
     }
 
     private static int lookupColor(int state) {
@@ -332,6 +403,7 @@ final class MapData {
     // ----- chunk sections -----
 
     static final class Section {
+        int[] direct; // set once a block in this section changes
         int single = -1;
         int[] palette;
         long[] data;
@@ -385,6 +457,7 @@ final class MapData {
         int si = y >> 4;
         if (si < 0 || si >= secs.length) return -1;
         Section s = secs[si];
+        if (s.direct != null) return s.direct[((y & 15) * 16 + z) * 16 + x];
         if (s.single >= 0) return s.single;
         int idx = ((y & 15) * 16 + z) * 16 + x;
         int per = 64 / s.bits;
