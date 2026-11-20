@@ -250,6 +250,16 @@ final class Bot {
                 connectHost = srv[0];
                 connectPort = Integer.parseInt(srv[1]);
                 Hub.log("Found SRV record: " + connectHost + ":" + connectPort);
+                if (connectHost.indexOf('_') >= 0) {
+                    // Android's resolver rejects hostnames with '_', so look the address up ourselves.
+                    String ip = resolveIp(connectHost);
+                    if (ip != null) {
+                        Hub.log("Server address: " + ip + ":" + connectPort);
+                        connectHost = ip;
+                    } else {
+                        Hub.log("Could not look up the address of " + connectHost);
+                    }
+                }
             }
         }
         serverLabel = addr;
@@ -868,7 +878,6 @@ final class Bot {
         if (depth > 4) return null;
         JSONArray ans = dnsQuery(name, "SRV");
         if (ans == null) return null;
-        String[] pointer = null;
         String cname = null;
         for (int i = 0; i < ans.length(); i++) {
             JSONObject a = ans.optJSONObject(i);
@@ -884,17 +893,32 @@ final class Bot {
             if (parts.length < 4) continue;
             String target = stripDot(parts[3]);
             if (target.isEmpty()) continue;
-            if (target.startsWith("_")) {
-                if (pointer == null) pointer = new String[]{target, parts[2]};
-                continue;
-            }
             return new String[]{target, parts[2]};
         }
-        if (pointer != null) {
-            String[] next = resolveSrv(pointer[0], depth + 1);
-            if (next != null) return next;
-        }
         if (cname != null && !cname.equals(name)) return resolveSrv(cname, depth + 1);
+        return null;
+    }
+
+    /** A / AAAA lookup over DNS-over-HTTPS. Prefers IPv4. */
+    private static String resolveIp(String host) {
+        for (String type : new String[]{"A", "AAAA"}) {
+            String name = host;
+            for (int hop = 0; hop < 5; hop++) {
+                JSONArray ans = dnsQuery(name, type);
+                if (ans == null) break;
+                String next = null;
+                for (int i = 0; i < ans.length(); i++) {
+                    JSONObject a = ans.optJSONObject(i);
+                    if (a == null) continue;
+                    int t = a.optInt("type");
+                    String data = stripDot(a.optString("data", "").trim());
+                    if ((t == 1 && type.equals("A")) || (t == 28 && type.equals("AAAA"))) return data;
+                    if (t == 5) next = data;
+                }
+                if (next == null || next.equals(name)) break;
+                name = next;
+            }
+        }
         return null;
     }
 
