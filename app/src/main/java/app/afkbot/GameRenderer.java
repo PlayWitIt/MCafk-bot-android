@@ -297,6 +297,7 @@ final class GameRenderer implements GLSurfaceView.Renderer, MapData.Changes {
         drawEntities(day, sr, sg, sb, far);
         drawCracks(a);
         drawOutline();
+        drawHand(a, day, aspect);
     }
 
     private double dist2(Section s) {
@@ -860,6 +861,158 @@ final class GameRenderer implements GLSurfaceView.Renderer, MapData.Changes {
         float nx = out[0] / out[3], ny = out[1] / out[3];
         if (nx < -1.2f || nx > 1.2f || ny < -1.2f || ny > 1.2f) return null;
         return new float[]{(nx + 1) / 2 * vw, (1 - ny) / 2 * vh};
+    }
+
+    // ---- first person: your arm, or the item you hold, with swing and walk bob ----
+
+    private volatile long swingAt;
+    private double lastBobX, lastBobZ, walked;
+    private final float[] handProj = new float[16];
+
+    /** Starts the arm swing (tap, hit, place, and repeatedly while breaking). */
+    void swing() {
+        long now = System.currentTimeMillis();
+        if (now - swingAt > 250) swingAt = now;
+    }
+
+    private void drawHand(GameAssetStore.Loaded a, float day, float aspect) {
+        if (icons == null || iconsFor != a) {
+            icons = new GameIcons(a.files, a.atlas);
+            iconsFor = a;
+        }
+        // walking bob: how far we've walked, smoothed
+        double dx = World.selfX - lastBobX, dz = World.selfZ - lastBobZ;
+        double step = Math.sqrt(dx * dx + dz * dz);
+        if (step < 1) walked += step;
+        lastBobX = World.selfX;
+        lastBobZ = World.selfZ;
+        float bobX = (float) Math.sin(walked * Math.PI * 0.9) * 0.02f, bobY = -(float) Math.abs(Math.cos(walked * Math.PI * 0.9)) * 0.025f;
+        float p = Math.min(1f, (System.currentTimeMillis() - swingAt) / 280f);
+        float sw = p >= 1 ? 0 : (float) Math.sin(p * Math.PI);
+        int l = MapData.lightAt((int) Math.floor(World.selfX), (int) Math.floor(World.selfY + 1), (int) Math.floor(World.selfZ));
+        if (l < 0) l = 0xF0;
+
+        Inv.Item held = Inv.heldItem();
+        GameIcons.Icon ic = held == null || Hub.versionData == null ? null : icons.get(Hub.versionData.itemId(held.id));
+        ByteBuffer bb = ByteBuffer.allocateDirect(8 * 4 * GameMesher.BYTES).order(ByteOrder.nativeOrder());
+        int quads = 0;
+        // the transform: a small rotation and a position at the lower right of the view, plus swing and bob
+        float tx = 0.56f + bobX - sw * 0.25f, ty = -0.52f + bobY + sw * 0.12f, tz = -0.72f - sw * 0.1f;
+        float rotX = -sw * 50f, rotY = -12f + sw * 20f;
+        if (ic == null || ic.empty()) { // the bare right arm (default skin)
+            int t = a.atlas.tile("entity/player/wide/steve");
+            if (t < 0) return;
+            int sx = (t % GameAtlas.GRID) * GameAtlas.TILE, sy = (t / GameAtlas.GRID) * GameAtlas.TILE;
+            float w = 0.11f, len = 0.8f;
+            // long axis along -z; uv rects (pixels in the 64x64 skin): length runs along v
+            float[][][] faces = {
+                    {{-w, w, 0}, {w, w, 0}, {w, w, -len}, {-w, w, -len}}, // top side (the arm's front)
+                    {{-w, -w, -len}, {w, -w, -len}, {w, -w, 0}, {-w, -w, 0}}, // underside
+                    {{-w, -w, 0}, {-w, w, 0}, {-w, w, -len}, {-w, -w, -len}}, // inner side (facing the centre)
+                    {{w, w, 0}, {w, -w, 0}, {w, -w, -len}, {w, w, -len}}, // outer side
+                    {{-w, -w, -len}, {-w, w, -len}, {w, w, -len}, {w, -w, -len}}}; // the hand
+            int[][] rects = {{44, 20, 4, 12}, {52, 20, 4, 12}, {48, 20, 4, 12}, {40, 20, 4, 12}, {48, 16, 4, 4}};
+            float[] shade = {1f, 0.55f, 0.8f, 0.65f, 0.9f};
+            for (int f = 0; f < 5; f++) {
+                int[] r = rects[f];
+                float[][] uv = f < 4 ? new float[][]{{sx + r[0], sy + r[1]}, {sx + r[0] + r[2], sy + r[1]}, {sx + r[0] + r[2], sy + r[1] + r[3]}, {sx + r[0], sy + r[1] + r[3]}}
+                        : new float[][]{{sx + r[0], sy + r[1] + r[3]}, {sx + r[0], sy + r[1]}, {sx + r[0] + r[2], sy + r[1]}, {sx + r[0] + r[2], sy + r[1] + r[3]}};
+                viewQuad(bb, faces[f], uv, 0xFFFFFF, shade[f], l, tx, ty, tz, rotX - 10, rotY + 8);
+                quads++;
+            }
+        } else { // the item, placed with its model's own first-person transform (like the game)
+            // the game's hand position, raised a little: on a wide phone screen with touch controls the game's own
+            // spot (-0.52) leaves held blocks mostly below the edge, behind the hotbar
+            float[] base = {0.54f + bobX - sw * 0.3f, -0.4f + bobY + sw * 0.1f, -0.72f - sw * 0.15f};
+            float swingRot = -sw * 40f;
+            if (ic.flat()) {
+                for (int[] layer : ic.layers) { // a 1x1 item quad (16 px) centred on the model's origin
+                    float[][] c = {{0, 0, 0.5f}, {1, 0, 0.5f}, {1, 1, 0.5f}, {0, 1, 0.5f}};
+                    float[][] uv = {{layer[0], layer[1] + layer[3]}, {layer[0] + layer[2], layer[1] + layer[3]}, {layer[0] + layer[2], layer[1]}, {layer[0], layer[1]}};
+                    itemQuad(bb, c, uv, layer[4] != 0 ? layer[4] : 0xFFFFFF, 1f, l, ic, base, swingRot);
+                    quads++;
+                }
+            } else {
+                int[][] rects = {ic.top, ic.top, ic.front, ic.side, ic.side, ic.side};
+                float[] shade = {1f, 0.5f, 0.8f, 0.8f, 0.6f, 0.6f};
+                for (int f = 0; f < 6; f++) {
+                    float[][] c = GameMesher.cornersOf(f, new float[]{0, 0, 0, 1, 1, 1});
+                    int[] r = rects[f];
+                    float[][] uv = {{r[0], r[1] + r[3]}, {r[0] + r[2], r[1] + r[3]}, {r[0] + r[2], r[1]}, {r[0], r[1]}};
+                    int tint = (f == 0 || ic.tintSides) && ic.tint != 0 ? ic.tint : 0xFFFFFF;
+                    itemQuad(bb, c, uv, tint, shade[f], l, ic, base, swingRot);
+                    quads++;
+                }
+            }
+        }
+        if (quads == 0) return;
+        Matrix.perspectiveM(handProj, 0, 70f, aspect, 0.02f, 10f);
+        GLES20.glClear(GLES20.GL_DEPTH_BUFFER_BIT); // the hand is always in front
+        GLES20.glUseProgram(prog);
+        GLES20.glUniformMatrix4fv(uMvp, 1, false, handProj, 0);
+        GLES20.glUniform3f(uOff, 0, 0, 0);
+        GLES20.glUniform2f(uFogRange, 1e6f, 2e6f);
+        GLES20.glUniform1f(uDay, day);
+        GLES20.glUniform1f(uAlphaRef, 0.5f);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texId);
+        GLES20.glDisable(GLES20.GL_CULL_FACE);
+        GLES20.glEnableVertexAttribArray(aPos);
+        GLES20.glEnableVertexAttribArray(aUv);
+        GLES20.glEnableVertexAttribArray(aCol);
+        GLES20.glEnableVertexAttribArray(aLight);
+        GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
+        GLES20.glBindBuffer(GLES20.GL_ELEMENT_ARRAY_BUFFER, indexBuf);
+        bb.position(0);
+        GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_SHORT, false, GameMesher.BYTES, bb);
+        bb.position(6);
+        GLES20.glVertexAttribPointer(aUv, 2, GLES20.GL_UNSIGNED_SHORT, true, GameMesher.BYTES, bb);
+        bb.position(10);
+        GLES20.glVertexAttribPointer(aCol, 4, GLES20.GL_UNSIGNED_BYTE, true, GameMesher.BYTES, bb);
+        bb.position(14);
+        GLES20.glVertexAttribPointer(aLight, 2, GLES20.GL_UNSIGNED_BYTE, true, GameMesher.BYTES, bb);
+        GLES20.glDrawElements(GLES20.GL_TRIANGLES, quads * 6, GLES20.GL_UNSIGNED_SHORT, 0);
+        GLES20.glDisableVertexAttribArray(aPos);
+        GLES20.glDisableVertexAttribArray(aUv);
+        GLES20.glDisableVertexAttribArray(aCol);
+        GLES20.glDisableVertexAttribArray(aLight);
+        GLES20.glEnable(GLES20.GL_CULL_FACE);
+    }
+
+    /**
+     * A quad of an item model (corners in 0..1 model space) placed like the game does it in first person:
+     * hand position + display translation (1/16 block) + rotation (X, Y, Z) + scale, around the model's centre.
+     */
+    private static void itemQuad(ByteBuffer bb, float[][] c, float[][] uvPx, int tint, float shade, int light, GameIcons.Icon ic,
+                                 float[] base, float swingRot) {
+        double rx = Math.toRadians(ic.fpRot[0] + swingRot), ry = Math.toRadians(ic.fpRot[1]), rz = Math.toRadians(ic.fpRot[2]);
+        int r = (int) (((tint >> 16) & 255) * shade), g = (int) (((tint >> 8) & 255) * shade), b = (int) ((tint & 255) * shade);
+        for (int k = 0; k < 4; k++) {
+            final double phone = 0.8; // a bit smaller than on a monitor, so it doesn't crowd the touch controls
+            double x = (c[k][0] - 0.5) * ic.fpScale[0] * phone, y = (c[k][1] - 0.5) * ic.fpScale[1] * phone, z = (c[k][2] - 0.5) * ic.fpScale[2] * phone;
+            // R = Rx * Ry * Rz (the game's rotationXYZ): Z first, then Y, then X
+            double x1 = x * Math.cos(rz) - y * Math.sin(rz), y1 = x * Math.sin(rz) + y * Math.cos(rz), z1 = z;
+            double x2 = x1 * Math.cos(ry) + z1 * Math.sin(ry), z2 = -x1 * Math.sin(ry) + z1 * Math.cos(ry), y2 = y1;
+            double y3 = y2 * Math.cos(rx) - z2 * Math.sin(rx), z3 = y2 * Math.sin(rx) + z2 * Math.cos(rx), x3 = x2;
+            double fx = base[0] + ic.fpTrans[0] / 16.0 * phone + x3, fy = base[1] + ic.fpTrans[1] / 16.0 * phone + y3, fz = base[2] + ic.fpTrans[2] / 16.0 * phone + z3;
+            bb.putShort((short) Math.round(fx * GameMesher.POS)).putShort((short) Math.round(fy * GameMesher.POS)).putShort((short) Math.round(fz * GameMesher.POS));
+            bb.putShort((short) Math.round(uvPx[k][0] / GameAtlas.SIZE * 65535)).putShort((short) Math.round(uvPx[k][1] / GameAtlas.SIZE * 65535));
+            bb.put((byte) r).put((byte) g).put((byte) b).put((byte) 255).put((byte) ((light >> 4) * 17)).put((byte) ((light & 15) * 17));
+        }
+    }
+
+    /** A quad in view space: corners rotated (X then Y, degrees) and moved to (tx, ty, tz); uvs in atlas pixels. */
+    private static void viewQuad(ByteBuffer bb, float[][] c, float[][] uvPx, int tint, float shade, int light, float tx, float ty, float tz, float rx, float ry) {
+        double ax = Math.toRadians(rx), ay = Math.toRadians(ry);
+        double cx = Math.cos(ax), sx = Math.sin(ax), cy = Math.cos(ay), sy = Math.sin(ay);
+        int r = (int) (((tint >> 16) & 255) * shade), g = (int) (((tint >> 8) & 255) * shade), b = (int) ((tint & 255) * shade);
+        for (int k = 0; k < 4; k++) {
+            double x = c[k][0], y = c[k][1], z = c[k][2];
+            double y1 = y * cx - z * sx, z1 = y * sx + z * cx;
+            double x2 = x * cy + z1 * sy, z2 = -x * sy + z1 * cy;
+            bb.putShort((short) Math.round((x2 + tx) * GameMesher.POS)).putShort((short) Math.round((y1 + ty) * GameMesher.POS)).putShort((short) Math.round((z2 + tz) * GameMesher.POS));
+            bb.putShort((short) Math.round(uvPx[k][0] / GameAtlas.SIZE * 65535)).putShort((short) Math.round(uvPx[k][1] / GameAtlas.SIZE * 65535));
+            bb.put((byte) r).put((byte) g).put((byte) b).put((byte) 255).put((byte) ((light >> 4) * 17)).put((byte) ((light & 15) * 17));
+        }
     }
 
     /** Crack texture over blocks being broken (ours and other players'), multiplied onto the block like vanilla. */

@@ -22,6 +22,8 @@ final class GameIcons {
         int[] top, front, side; // cube faces, or null for a flat icon
         int tint; // cube tint (grass, leaves), 0 = none
         boolean tintSides;
+        /** The model's first-person (right hand) display transform: rotation degrees XYZ, translation (1/16), scale. */
+        float[] fpRot = {0, -90, 25}, fpTrans = {1.13f, 3.2f, 1.13f}, fpScale = {0.68f, 0.68f, 0.68f};
 
         boolean flat() {
             return top == null;
@@ -94,6 +96,7 @@ final class GameIcons {
     private Icon fromModel(String id, String model, JSONArray tints) throws Exception {
         Map<String, String> tex = new HashMap<String, String>();
         boolean flat = false, block = false;
+        JSONObject fp = null;
         String m = model;
         for (int depth = 0; m != null && depth < 16; depth++) {
             if (m.equals("item/generated") || m.equals("item/handheld") || m.startsWith("builtin/generated") || m.equals("item/handheld_rod")
@@ -109,10 +112,21 @@ final class GameIcons {
                     if (!tex.containsKey(k)) tex.put(k, t.getString(k));
                 }
             }
+            JSONObject disp = j.optJSONObject("display");
+            if (fp == null && disp != null) fp = disp.optJSONObject("firstperson_righthand");
             String parent = j.optString("parent", null);
             m = parent == null ? null : strip(parent);
         }
         Icon ic = new Icon();
+        if (fp != null) {
+            ic.fpRot = vec(fp.optJSONArray("rotation"), 0f);
+            ic.fpTrans = vec(fp.optJSONArray("translation"), 0f);
+            ic.fpScale = vec(fp.optJSONArray("scale"), 1f);
+        } else if (block) {
+            ic.fpRot = new float[]{0, 45, 0};
+            ic.fpTrans = new float[]{0, 0, 0};
+            ic.fpScale = new float[]{0.4f, 0.4f, 0.4f};
+        }
         if (flat || (!block && tex.containsKey("layer0"))) {
             for (int l = 0; l < 5; l++) {
                 int t = tile(tex, "layer" + l);
@@ -231,6 +245,12 @@ final class GameIcons {
     }
 
     // ---------------------------------------------------------------- helpers
+
+    private static float[] vec(JSONArray a, float def) {
+        float[] v = {def, def, def};
+        if (a != null) for (int i = 0; i < 3 && i < a.length(); i++) v[i] = (float) a.optDouble(i, def);
+        return v;
+    }
 
     private static int[] tileRect(int tile, int tint) {
         return new int[]{(tile % GameAtlas.GRID) * GameAtlas.TILE, (tile / GameAtlas.GRID) * GameAtlas.TILE, GameAtlas.TILE, GameAtlas.TILE, tint};

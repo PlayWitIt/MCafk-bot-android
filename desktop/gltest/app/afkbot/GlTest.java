@@ -93,6 +93,14 @@ public class GlTest {
         shot(r, b, out + "/gl_torch_room.png", 180, 25, 6000);
         PreviewTest.cmd("tp Tester 5 -60 -4 0 10");
         Thread.sleep(1500);
+        b.selectSlot(2);
+        Thread.sleep(600);
+        shot(r, b, out + "/gl_hand_torch.png", 0, 12, 6000);
+        b.selectSlot(3);
+        Thread.sleep(600);
+        shot(r, b, out + "/gl_hand_block.png", 0, 12, 6000);
+        b.selectSlot(0);
+        Thread.sleep(600);
         hud.screen = GameHud.INVENTORY;
         shot(r, b, out + "/gl_inventory.png", 0, 12, 6000);
         hud.screen = GameHud.PAUSE;

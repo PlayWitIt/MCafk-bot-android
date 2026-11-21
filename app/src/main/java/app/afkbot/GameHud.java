@@ -689,11 +689,13 @@ final class GameHud extends View {
             if (now - lastHit > 450) { // keep hitting while held (about the attack cooldown)
                 lastHit = now;
                 b.attack(e);
+                r.swing();
             }
             return;
         }
         int[] t = r.targetBlock;
         if (t == null) return;
+        if (b.isMining()) r.swing(); // the arm keeps swinging while breaking
         boolean same = holdTarget != null && holdTarget[0] == t[0] && holdTarget[1] == t[1] && holdTarget[2] == t[2];
         if (!same || !b.isMining()) {
             if (same && !b.isMining() && MapData.stateAt(t[0], t[1], t[2]) <= 0) return; // just broke it
@@ -711,6 +713,7 @@ final class GameHud extends View {
     /** A short tap: hit the mob you're looking at, or use/place on the block, or use the held item. */
     private void tap(Bot b) {
         if (b == null) return;
+        r.swing();
         World.Dot e = r.targetEntity;
         if (e != null) {
             b.attack(e);
