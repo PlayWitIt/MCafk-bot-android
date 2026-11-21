@@ -29,7 +29,7 @@ public class GLES20 {
             GL_UNSIGNED_BYTE = 0x1401, GL_SRC_ALPHA = 0x0302, GL_ONE_MINUS_SRC_ALPHA = 0x0303, GL_SRC_COLOR = 0x0300,
             GL_DST_COLOR = 0x0306, GL_TEXTURE0 = 0x84C0, GL_TEXTURE_2D = 0x0DE1, GL_TEXTURE_MAG_FILTER = 0x2800,
             GL_TEXTURE_MIN_FILTER = 0x2801, GL_TEXTURE_WRAP_S = 0x2802, GL_TEXTURE_WRAP_T = 0x2803, GL_NEAREST = 0x2600,
-            GL_CLAMP_TO_EDGE = 0x812F, GL_RGBA = 0x1908, GL_NO_ERROR = 0;
+            GL_CLAMP_TO_EDGE = 0x812F, GL_REPEAT = 0x2901, GL_ONE = 1, GL_RGBA = 0x1908, GL_NO_ERROR = 0;
 
     private static final Linker L = Linker.nativeLinker();
     private static final SymbolLookup GL = SymbolLookup.libraryLookup("libGLESv2.so.2", Arena.global());
@@ -77,6 +77,7 @@ public class GLES20 {
             UMAT4 = h("glUniformMatrix4fv", FunctionDescriptor.ofVoid(JAVA_INT, JAVA_INT, JAVA_BYTE, ADDRESS)),
             USE = h("glUseProgram", V_I), ATTRIB_PTR = h("glVertexAttribPointer", FunctionDescriptor.ofVoid(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_BYTE, JAVA_INT, ADDRESS)),
             VIEWPORT = h("glViewport", V_IIII), GET_ERROR = h("glGetError", FunctionDescriptor.of(JAVA_INT)),
+            ATTRIB4F = h("glVertexAttrib4f", FunctionDescriptor.ofVoid(JAVA_INT, JAVA_FLOAT, JAVA_FLOAT, JAVA_FLOAT, JAVA_FLOAT)),
             READ_PIXELS = h("glReadPixels", FunctionDescriptor.ofVoid(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS));
 
     public static void glActiveTexture(int t) { try { ACTIVE_TEXTURE.invoke(t); } catch (Throwable e) { throw wrap(e); } }
@@ -110,6 +111,7 @@ public class GLES20 {
     public static void glUniform4f(int l, float a, float b, float c, float d) { try { U4F.invoke(l, a, b, c, d); } catch (Throwable e) { throw wrap(e); } }
     public static void glUseProgram(int p) { try { USE.invoke(p); } catch (Throwable e) { throw wrap(e); } }
     public static void glViewport(int x, int y, int w, int h) { try { VIEWPORT.invoke(x, y, w, h); } catch (Throwable e) { throw wrap(e); } }
+    public static void glVertexAttrib4f(int i, float a, float b, float c, float d) { try { ATTRIB4F.invoke(i, a, b, c, d); } catch (Throwable e) { throw wrap(e); } }
     public static int glGetError() { try { return (int) GET_ERROR.invoke(); } catch (Throwable e) { throw wrap(e); } }
 
     public static void glVertexAttribPointer(int i, int size, int type, boolean norm, int stride, int offset) {

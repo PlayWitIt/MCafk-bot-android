@@ -985,7 +985,8 @@ final class Bot {
         } else if (pid == id(Proto.P_C_UPDATE_LIGHT)) {
             if (MapData.keepLight) MapData.readLightUpdate(p);
         } else if (pid == id(Proto.P_C_UPDATE_TIME)) {
-            p.i64(); // world age
+            GameState.worldAge = p.i64();
+            GameState.worldAgeAt = System.currentTimeMillis();
             long t;
             if (proto >= 775) { // 26.1: a list of world clocks (id, total ticks, ...); the first is the day clock
                 t = GameState.dayTime;

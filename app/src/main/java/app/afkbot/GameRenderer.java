@@ -124,6 +124,7 @@ final class GameRenderer implements GLSurfaceView.Renderer, MapData.Changes {
     }
 
     // ---- GL ----
+    private final GameSky sky = new GameSky();
     private int prog, aPos, aUv, aCol, aLight, uMvp, uOff, uDay, uFog, uFogRange, uAlphaRef, uTex;
     private int lineProg, lPos, lMvp, lColor, lOff;
     private int texId, indexBuf;
@@ -181,6 +182,7 @@ final class GameRenderer implements GLSurfaceView.Renderer, MapData.Changes {
         lOff = GLES20.glGetUniformLocation(lineProg, "uOff");
         lColor = GLES20.glGetUniformLocation(lineProg, "uColor");
         initEntities();
+        sky.init();
         // one index buffer for all quads: 0 1 2 0 2 3, 4 5 6 4 6 7, ... (16384 quads = 65536 vertices)
         ShortBuffer ib = ByteBuffer.allocateDirect(16384 * 6 * 2).order(ByteOrder.nativeOrder()).asShortBuffer();
         for (int q = 0; q < 16384; q++) {
@@ -213,8 +215,8 @@ final class GameRenderer implements GLSurfaceView.Renderer, MapData.Changes {
     public void onDrawFrame(GL10 unused) {
         GameAssetStore.Loaded a = assets;
         float day = GameState.daylight();
-        int sky = GameLight.skyColor(day, GameState.rain);
-        float sr = ((sky >> 16) & 255) / 255f, sg = ((sky >> 8) & 255) / 255f, sb = (sky & 255) / 255f;
+        float[] fogc = GameSky.fogColor(day, GameState.rain); // the world fades into the horizon colour, like the game
+        float sr = fogc[0], sg = fogc[1], sb = fogc[2];
         GLES20.glClearColor(sr, sg, sb, 1f);
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT | GLES20.GL_DEPTH_BUFFER_BIT);
         if (a == null || !World.inWorld) return;
@@ -243,6 +245,7 @@ final class GameRenderer implements GLSurfaceView.Renderer, MapData.Changes {
         Matrix.setLookAtM(view, 0, 0, 0, 0, fx, fy, fz, 0, 1, 0);
         Matrix.multiplyMM(mvp, 0, proj, 0, view, 0);
         extractPlanes(mvp);
+        sky.draw(a, fov, aspect, view, camX, camY, camZ, day, GameState.rain, far);
 
         GLES20.glEnable(GLES20.GL_DEPTH_TEST);
         GLES20.glDepthFunc(GLES20.GL_LEQUAL);
@@ -899,7 +902,7 @@ final class GameRenderer implements GLSurfaceView.Renderer, MapData.Changes {
         GLES20.glDisable(GLES20.GL_BLEND);
     }
 
-    private static int program(String vs, String fs) {
+    static int program(String vs, String fs) {
         int v = shader(GLES20.GL_VERTEX_SHADER, vs), f = shader(GLES20.GL_FRAGMENT_SHADER, fs);
         int p = GLES20.glCreateProgram();
         GLES20.glAttachShader(p, v);

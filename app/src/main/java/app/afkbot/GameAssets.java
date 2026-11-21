@@ -19,10 +19,7 @@ final class GameAssets {
                 || n.startsWith("assets/minecraft/textures/block/") || n.startsWith("assets/minecraft/textures/item/")
                 || n.startsWith("assets/minecraft/textures/entity/chest/")
                 || n.startsWith("assets/minecraft/textures/gui/sprites/hud/")
-                || n.equals("assets/minecraft/textures/environment/sun.png")
-                || n.equals("assets/minecraft/textures/environment/moon_phases.png")
-                || n.equals("assets/minecraft/textures/environment/moon/full_moon.png")
-                || n.equals("assets/minecraft/textures/environment/clouds.png")
+                || n.startsWith("assets/minecraft/textures/environment/") // sun, moon (both layouts), clouds
                 || n.equals("assets/minecraft/textures/font/ascii.png")
                 || n.equals("assets/minecraft/lang/en_us.json")
                 || n.equals("assets/minecraft/textures/gui/container/inventory.png")

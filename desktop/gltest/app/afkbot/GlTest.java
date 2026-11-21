@@ -68,7 +68,17 @@ public class GlTest {
         shot(r, b, out + "/gl_day.png", 0, 12, 6000);
         PreviewTest.cmd("time set 18000");
         Thread.sleep(1500);
-        shot(r, b, out + "/gl_night.png", 0, 12, 18000);
+        shot(r, b, out + "/gl_night.png", 0, -25, 18000);
+        PreviewTest.cmd("time set 23200");
+        Thread.sleep(1500);
+        shot(r, b, out + "/gl_sunrise.png", -90, -8, 23200);
+        PreviewTest.cmd("kill @e[type=slime]");
+        PreviewTest.cmd("time set 3000");
+        Thread.sleep(1500);
+        shot(r, b, out + "/gl_sky.png", -90, -45, 3000);
+        PreviewTest.cmd("time set 14500");
+        Thread.sleep(1500);
+        shot(r, b, out + "/gl_moon.png", -90, -30, 14500);
         PreviewTest.cmd("time set 6000");
         PreviewTest.cmd("tp Tester 10.5 -59.5 12.5 135 28");
         Thread.sleep(1500);

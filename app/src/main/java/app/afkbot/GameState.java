@@ -23,6 +23,8 @@ final class GameState {
     static volatile long dayTime = 6000;
     static volatile long dayTimeAt = System.currentTimeMillis();
     static volatile boolean dayTicks = true;
+    /** World age in ticks (from the time packet; drives cloud drift). */
+    static volatile long worldAge, worldAgeAt = System.currentTimeMillis();
     static volatile float rain;
     /** 0 survival, 1 creative, 2 adventure, 3 spectator. */
     static volatile int gameMode;
@@ -39,6 +41,15 @@ final class GameState {
         long t = dayTime;
         if (dayTicks) t += (System.currentTimeMillis() - dayTimeAt) / 50;
         return ((t % 24000) + 24000) % 24000;
+    }
+
+    static long worldAge() {
+        return worldAge + (System.currentTimeMillis() - worldAgeAt) / 50;
+    }
+
+    /** Which day it is (for the moon's phase). */
+    static long worldDay() {
+        return (long) Math.floor((dayTime + (dayTicks ? (System.currentTimeMillis() - dayTimeAt) / 50 : 0)) / 24000.0);
     }
 
     /** How bright the sky is, 0 (night) .. 1 (day), like vanilla's sky darkening (rain makes it darker). */
