@@ -169,6 +169,12 @@ final class Auth {
     }
 
     /** Returns a usable session, refreshing tokens silently if needed. */
+    /** A session whose token stays valid for at least minValidMs (refreshed early otherwise), e.g. for a play session. */
+    static Session sessionValidFor(Context c, long minValidMs) throws Exception {
+        long exp = prefs(c).getLong("mc_expires", 0);
+        return session(c, System.currentTimeMillis() > exp - minValidMs);
+    }
+
     static synchronized Session session(Context c, boolean forceRefresh) throws Exception {
         SharedPreferences p = prefs(c);
         String refresh = p.getString("msa_refresh", null);

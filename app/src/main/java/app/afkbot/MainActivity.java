@@ -138,6 +138,34 @@ public class MainActivity extends Activity implements Hub.Listener {
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1);
         }
+        if (b == null) handleIntent(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleIntent(intent);
+    }
+
+    /** AFK Bot Play opens us with RESUME_AFK when the game closes: let the bot take the account back. */
+    private void handleIntent(Intent in) {
+        if (in == null || !ACTION_RESUME.equals(in.getAction())) return;
+        in.setAction(Intent.ACTION_MAIN); // handle once (e.g. not again after rotation)
+        selectTab(T_HOME);
+        android.content.SharedPreferences p = getSharedPreferences("play", MODE_PRIVATE);
+        boolean wasRunning = p.getBoolean("botWasRunning", false);
+        p.edit().putBoolean("botWasRunning", false).apply();
+        if (!wasRunning || Hub.running) {
+            toast("Game closed");
+            return;
+        }
+        toast("Welcome back - the bot is rejoining " + cfg.address);
+        ui.postDelayed(new Runnable() { // give the server a moment to see the game's session end
+            public void run() {
+                if (!Hub.running) toggle();
+            }
+        }, 3000);
     }
 
     @Override
@@ -152,6 +180,7 @@ public class MainActivity extends Activity implements Hub.Listener {
         resumed = true;
         Hub.addListener(this);
         Auth.wake();
+        playHave = playInstalled();
         onChange();
         update3dLifecycle();
         ui.post(radarTick);
@@ -349,6 +378,8 @@ public class MainActivity extends Activity implements Hub.Listener {
         });
         hero.addView(startStop);
 
+        buildPlayCard(col);
+
         LinearLayout grid1 = row(col);
         statHealth = tile(grid1, "Health");
         statNearest = tile(grid1, "Nearest player");
@@ -389,6 +420,144 @@ public class MainActivity extends Activity implements Hub.Listener {
         recent.setPadding(0, dp(6), 0, 0);
         ac.addView(recent);
         return scroll(col);
+    }
+
+    // ---------------------------------------------------------------- Play (the real game, via AFK Bot Play)
+
+    static final String PLAY_PACKAGE = "app.afkbot.play", ACTION_RESUME = "app.afkbot.action.RESUME_AFK";
+    private static final String PLAY_DOWNLOAD = "https://github.com/PlayWitIt/MCafk-bot-android/releases/download/play-latest/AFKBotPlay.apk";
+    private TextView playSub;
+    private Button playButton;
+
+    private void buildPlayCard(LinearLayout col) {
+        LinearLayout c = card(col);
+        LinearLayout head = row(c);
+        View icon = new View(this);
+        icon.setBackground(new android.graphics.drawable.LayerDrawable(new android.graphics.drawable.Drawable[]{
+                gradient(ACCENT, ACCENT2, dp(12)), new android.graphics.drawable.InsetDrawable(new Icons(Icons.CUBE, Color.WHITE), dp(9))}));
+        head.addView(icon, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        LinearLayout titles = new LinearLayout(this);
+        titles.setOrientation(LinearLayout.VERTICAL);
+        titles.setPadding(dp(12), 0, 0, 0);
+        titles.addView(text("Play Minecraft", 16, TEXT, true));
+        playSub = text("", 12, MUTED, false);
+        titles.addView(playSub);
+        head.addView(titles, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        playButton = smallButton("Play", ACCENT);
+        playButton.setMinimumHeight(dp(48));
+        playButton.setBackground(gradient(ACCENT, ACCENT2, dp(12)));
+        c.addView(playButton);
+        playButton.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                play();
+            }
+        });
+        updatePlayCard();
+    }
+
+    private boolean playInstalled() {
+        try {
+            getPackageManager().getPackageInfo(PLAY_PACKAGE, 0);
+            return true;
+        } catch (PackageManager.NameNotFoundException e) {
+            return false;
+        }
+    }
+
+    private boolean playHave;
+
+    private void updatePlayCard() {
+        if (playSub == null) return;
+        boolean have = playHave; // refreshed in onResume (coming back from installing it)
+        playSub.setText(have ? "The real Java Edition on " + cfg.address + ". The bot steps aside while you play and rejoins when you quit."
+                : "Play the real Java Edition on this phone with the AFK Bot Play add-on.");
+        playButton.setText(have ? "Play on " + cfg.address : "Get AFK Bot Play");
+    }
+
+    /** The server's Minecraft version, remembered from the last time the bot was on it. */
+    private String serverVersion() {
+        String v = Hub.versionName;
+        if (v != null && Hub.running) return v;
+        return getSharedPreferences("play", MODE_PRIVATE).getString("version:" + cfg.address.toLowerCase(Locale.US), v);
+    }
+
+    private void play() {
+        playHave = playInstalled();
+        updatePlayCard();
+        if (!playHave) {
+            new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                    .setTitle("Get AFK Bot Play")
+                    .setMessage("AFK Bot Play is a second app that runs the real Minecraft: Java Edition (Mojang's own game, via the open-source Amethyst launcher).\n\n"
+                            + "\u2022 Works best on a recent phone with 6 GB of RAM or more\n"
+                            + "\u2022 The first start downloads Java and the game from Mojang (several hundred MB - use Wi-Fi)\n"
+                            + "\u2022 Uses the account you're signed in with here; nothing to set up\n\n"
+                            + "Download it, open the file to install, then come back and tap Play.")
+                    .setPositiveButton("Download", new android.content.DialogInterface.OnClickListener() {
+                        public void onClick(android.content.DialogInterface d, int w) {
+                            try {
+                                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(PLAY_DOWNLOAD)));
+                            } catch (Exception e) {
+                                toast("No browser found");
+                            }
+                        }
+                    })
+                    .setNegativeButton("Not now", null)
+                    .show();
+            return;
+        }
+        if (cfg.offline) {
+            toast("Play needs a Microsoft account (offline mode is on in Account)");
+            return;
+        }
+        if (Auth.signedInName(this) == null) {
+            toast("Sign in with Microsoft first");
+            selectTab(T_ACCOUNT);
+            return;
+        }
+        final boolean running = Hub.running;
+        confirm("Play on " + cfg.address + "?", (running ? "The bot leaves the server so you can join - an account can only be online once. " : "")
+                        + "When you quit the game, AFK Bot opens again" + (running ? " and the bot rejoins." : "."),
+                "Play", new Runnable() {
+                    public void run() {
+                        handOff(running);
+                    }
+                });
+    }
+
+    private void handOff(final boolean botWasRunning) {
+        final String server = cfg.address.trim(), version = serverVersion();
+        final android.content.Context app = getApplicationContext();
+        toast("Getting your login ready...");
+        new Thread(new Runnable() {
+            public void run() {
+                try {
+                    // a token that stays valid for a long session (the game also uses it to rejoin)
+                    final Auth.Session s = Auth.sessionValidFor(app, 3 * 60 * 60 * 1000L);
+                    ui.post(new Runnable() {
+                        public void run() {
+                            getSharedPreferences("play", MODE_PRIVATE).edit().putBoolean("botWasRunning", botWasRunning).apply();
+                            if (Hub.running) stopBot();
+                            Intent i = new Intent();
+                            i.setClassName(PLAY_PACKAGE, "net.kdt.pojavlaunch.afkbot.HandoffActivity");
+                            i.putExtra("accessToken", s.accessToken).putExtra("uuid", s.uuid).putExtra("name", s.name)
+                                    .putExtra("server", server).putExtra("version", version == null ? "" : version);
+                            try {
+                                startActivity(i);
+                                Hub.log("Handed the account to AFK Bot Play (" + server + (version != null ? ", " + version : "") + ")");
+                            } catch (Exception e) {
+                                toast("Couldn't open AFK Bot Play: " + e.getMessage() + " - reinstall it from the Play card");
+                            }
+                        }
+                    });
+                } catch (final Exception e) {
+                    ui.post(new Runnable() {
+                        public void run() {
+                            toast("Couldn't get your login: " + e.getMessage());
+                        }
+                    });
+                }
+            }
+        }, "play-handoff").start();
     }
 
     private TextView tile(LinearLayout parent, String name) {
@@ -2592,7 +2761,13 @@ public class MainActivity extends Activity implements Hub.Listener {
         String word = Hub.color == Hub.GREEN ? "Online" : Hub.color == Hub.YELLOW ? "Connecting" : Hub.color == Hub.RED ? (running ? "Problem" : "Offline") : running ? "Starting" : "Stopped";
         statusDot.setText("\u25CF  " + word);
         statusDot.setBackground(round(sc == MUTED ? SURFACE2 : (sc & 0x00FFFFFF) | 0x1F000000, dp(20), sc == MUTED ? STROKE : (sc & 0x00FFFFFF) | 0x66000000));
+        String vn = Hub.versionName;
+        if (vn != null && Hub.running && !vn.equals(lastSavedVersion)) {
+            lastSavedVersion = vn;
+            getSharedPreferences("play", MODE_PRIVATE).edit().putString("version:" + cfg.address.toLowerCase(Locale.US), vn).apply();
+        }
         if (tab == 0) {
+            updatePlayCard();
             statusText.setText(Hub.status);
             statusText.setTextColor(sc == MUTED ? TEXT : sc);
             String name = Auth.signedInName(this);
@@ -2636,6 +2811,8 @@ public class MainActivity extends Activity implements Hub.Listener {
             updateAccount();
         }
     }
+
+    private String lastSavedVersion;
 
     private void updateAccount() {
         String name = Auth.signedInName(this);

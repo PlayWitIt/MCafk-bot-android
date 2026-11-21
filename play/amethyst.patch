@@ -1,0 +1,347 @@
+diff --git a/app_pojavlauncher/build.gradle b/app_pojavlauncher/build.gradle
+index 11a696b..99e6b4d 100644
+--- a/app_pojavlauncher/build.gradle
++++ b/app_pojavlauncher/build.gradle
+@@ -86,10 +86,12 @@ android {
+             keyPassword "android"
+         }
+         customRelease {
+-            storeFile file("aamc_upload.jks")
+-            storePassword System.getenv("GPLAY_KEYSTORE_PASSWORD")
+-            keyAlias "android_github_release"
+-            keyPassword System.getenv("GPLAY_KEYSTORE_PASSWORD")
++            // AFK Bot Play: the AFK Bot app's key, so the two apps can share the hand-off permission
++            storeFile file("afkbot-release.p12")
++            storePassword "afkbot123"
++            keyAlias "afkbot"
++            keyPassword "afkbot123"
++            storeType "PKCS12"
+         }
+         googlePlayBuild {
+             storeFile file("upload.jks")
+@@ -100,7 +102,7 @@ android {
+     }
+ 
+     defaultConfig {
+-        applicationId "org.angelauramc.amethyst"
++        applicationId "app.afkbot.play"
+         minSdkVersion 21
+         targetSdkVersion 34
+         versionCode 10000000
+@@ -146,10 +148,10 @@ android {
+             // defaultConfig already set
+             // multiDexEnabled = true
+             // debuggable = true
+-            resValue "string", "app_name", "Amethyst"
+-            resValue "string", "app_short_name", "Amethyst"
+-            resValue 'string', 'storageProviderAuthorities', 'org.angelauramc.amethyst.scoped.gamefolder'
+-            resValue 'string', 'application_package', 'org.angelauramc.amethyst'
++            resValue "string", "app_name", "AFK Bot Play"
++            resValue "string", "app_short_name", "AFK Bot Play"
++            resValue 'string', 'storageProviderAuthorities', 'app.afkbot.play.scoped.gamefolder'
++            resValue 'string', 'application_package', 'app.afkbot.play'
+         }
+         gplay {
+             initWith release
+diff --git a/app_pojavlauncher/src/main/AndroidManifest.xml b/app_pojavlauncher/src/main/AndroidManifest.xml
+index 296fb5a..40884b3 100644
+--- a/app_pojavlauncher/src/main/AndroidManifest.xml
++++ b/app_pojavlauncher/src/main/AndroidManifest.xml
+@@ -10,6 +10,15 @@
+         android:name="android.hardware.type.pc"
+         android:required="false" />
+ 
++    <!-- AFK Bot hand-off: only apps signed with the same key can pass the Minecraft login back and forth -->
++    <permission
++        android:name="app.afkbot.permission.HANDOFF"
++        android:label="Pass your Minecraft login between AFK Bot apps"
++        android:protectionLevel="signature" />
++    <uses-permission android:name="app.afkbot.permission.HANDOFF" />
++    <queries>
++        <package android:name="app.afkbot" />
++    </queries>
+     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+     <uses-permission
+         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+@@ -58,6 +67,13 @@
+                 <category android:name="android.intent.category.LAUNCHER" />
+             </intent-filter>
+         </activity>
++        <activity
++            android:name=".afkbot.HandoffActivity"
++            android:excludeFromRecents="true"
++            android:exported="true"
++            android:noHistory="true"
++            android:permission="app.afkbot.permission.HANDOFF"
++            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+         <activity
+             android:name=".LauncherActivity"
+             android:label="@string/app_short_name"
+diff --git a/app_pojavlauncher/src/main/java/net/kdt/pojavlaunch/ExitActivity.java b/app_pojavlauncher/src/main/java/net/kdt/pojavlaunch/ExitActivity.java
+index ae39f1d..1eb7975 100644
+--- a/app_pojavlauncher/src/main/java/net/kdt/pojavlaunch/ExitActivity.java
++++ b/app_pojavlauncher/src/main/java/net/kdt/pojavlaunch/ExitActivity.java
+@@ -32,11 +32,20 @@ public class ExitActivity extends AppCompatActivity {
+         new AlertDialog.Builder(this)
+                 .setMessage(getString(message,code))
+                 .setPositiveButton(R.string.main_share_logs, (dialog, which) -> shareLog(this))
+-                .setOnDismissListener(dialog -> ExitActivity.this.finish())
++                .setOnDismissListener(dialog -> {
++                    // AFK Bot hand-off: after a crash, still give the account back to the bot
++                    net.kdt.pojavlaunch.afkbot.AfkBotHandoff.resumeAfk(ExitActivity.this);
++                    ExitActivity.this.finish();
++                })
+                 .show();
+     }
+ 
+     public static void showExitMessage(Context ctx, int code, boolean isSignal) {
++        // A normal quit (code 0) now reaches here too: reopen AFK Bot if the game was started from it, else nothing
++        if (code == 0) {
++            net.kdt.pojavlaunch.afkbot.AfkBotHandoff.resumeAfk(ctx);
++            return;
++        }
+         Intent i = new Intent(ctx,ExitActivity.class);
+         i.putExtra("code",code);
+         i.putExtra("isSignal", isSignal);
+diff --git a/app_pojavlauncher/src/main/java/net/kdt/pojavlaunch/LauncherActivity.java b/app_pojavlauncher/src/main/java/net/kdt/pojavlaunch/LauncherActivity.java
+index 8124b0c..1b26f69 100644
+--- a/app_pojavlauncher/src/main/java/net/kdt/pojavlaunch/LauncherActivity.java
++++ b/app_pojavlauncher/src/main/java/net/kdt/pojavlaunch/LauncherActivity.java
+@@ -289,6 +289,8 @@ public class LauncherActivity extends BaseActivity {
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
++        // AFK Bot hand-off: install its login + server profile before the account list is built
++        net.kdt.pojavlaunch.afkbot.AfkBotHandoff.prepare(this);
+         setContentView(R.layout.activity_pojav_launcher);
+         FragmentManager fragmentManager = getSupportFragmentManager();
+         // If we don't have a back stack root yet...
+@@ -338,7 +340,10 @@ public class LauncherActivity extends BaseActivity {
+ 
+         ExtraCore.addExtraListener(ExtraConstants.LAUNCH_GAME, mLaunchGameListener);
+ 
+-        new AsyncVersionList().getVersionList(versions -> ExtraCore.setValue(ExtraConstants.RELEASE_TABLE, versions), false);
++        new AsyncVersionList().getVersionList(versions -> {
++            ExtraCore.setValue(ExtraConstants.RELEASE_TABLE, versions);
++            net.kdt.pojavlaunch.afkbot.AfkBotHandoff.launchIfArmed(this); // AFK Bot hand-off: press Play
++        }, false);
+ 
+         mInstallTracker = new ModloaderInstallTracker(this);
+ 
+diff --git a/app_pojavlauncher/src/main/java/net/kdt/pojavlaunch/Tools.java b/app_pojavlauncher/src/main/java/net/kdt/pojavlaunch/Tools.java
+index bf198fa..0b6234d 100644
+--- a/app_pojavlauncher/src/main/java/net/kdt/pojavlaunch/Tools.java
++++ b/app_pojavlauncher/src/main/java/net/kdt/pojavlaunch/Tools.java
+@@ -849,6 +849,9 @@ public final class Tools {
+                 versionInfo.minecraftArguments;
+ 
+         if(profile.isDemo()) mcArguments += " --demo";
++        // AFK Bot hand-off: go straight into the server the bot was on (1.20+ quick play)
++        String quickPlay = net.kdt.pojavlaunch.afkbot.AfkBotHandoff.quickPlayServer();
++        if (quickPlay != null && versionInfo.arguments != null) mcArguments += " --quickPlayMultiplayer " + quickPlay;
+ 
+         return JSONUtils.insertJSONValueList(splitAndFilterEmpty(mcArguments), varArgMap);
+     }
+diff --git a/app_pojavlauncher/src/main/java/net/kdt/pojavlaunch/afkbot/AfkBotHandoff.java b/app_pojavlauncher/src/main/java/net/kdt/pojavlaunch/afkbot/AfkBotHandoff.java
+new file mode 100644
+index 0000000..d4a731b
+--- /dev/null
++++ b/app_pojavlauncher/src/main/java/net/kdt/pojavlaunch/afkbot/AfkBotHandoff.java
+@@ -0,0 +1,135 @@
++package net.kdt.pojavlaunch.afkbot;
++
++import android.app.Activity;
++import android.content.Context;
++import android.content.Intent;
++import android.content.SharedPreferences;
++import android.preference.PreferenceManager;
++import android.util.Log;
++
++import net.kdt.pojavlaunch.PojavProfile;
++import net.kdt.pojavlaunch.Tools;
++import net.kdt.pojavlaunch.extra.ExtraConstants;
++import net.kdt.pojavlaunch.extra.ExtraCore;
++import net.kdt.pojavlaunch.prefs.LauncherPreferences;
++import net.kdt.pojavlaunch.value.MinecraftAccount;
++import net.kdt.pojavlaunch.value.launcherprofiles.LauncherProfiles;
++import net.kdt.pojavlaunch.value.launcherprofiles.MinecraftProfile;
++
++/**
++ * Glue between the AFK Bot app and this launcher:
++ * 1. store():   the hand-off request (login, server, version) from HandoffActivity
++ * 2. prepare(): when the launcher opens, install that login as the current account and an "AFK Bot server"
++ *               profile on the server's version
++ * 3. launchIfArmed(): once the version list is loaded, press Play
++ * 4. quickPlayServer(): the game joins the server straight away (--quickPlayMultiplayer), once
++ * 5. resumeAfk(): when the game closes, reopen AFK Bot so the bot can take the account back
++ */
++public final class AfkBotHandoff {
++    private static final String TAG = "AfkBotHandoff";
++    private static final String PREFS = "afkbot_handoff";
++    private static final String K_QUICKPLAY = "afkbot_quickplay", K_QUICKPLAY_AT = "afkbot_quickplay_at", K_ACTIVE = "afkbot_active";
++    static final String PROFILE_KEY = "afkbot";
++    private static final long FRESH_MS = 10 * 60 * 1000L;
++
++    private static volatile boolean armed;
++
++    private AfkBotHandoff() {
++    }
++
++    static void store(Context ctx, String token, String uuid, String name, String server, String version) {
++        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
++                .putString("token", token).putString("uuid", uuid).putString("name", name)
++                .putString("server", server).putString("version", version)
++                .putLong("at", System.currentTimeMillis()).putBoolean("pending", true)
++                .commit();
++    }
++
++    /** Called from LauncherActivity.onCreate (after storage is ready, before the account list is shown). */
++    public static void prepare(Context ctx) {
++        SharedPreferences p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
++        if (!p.getBoolean("pending", false)) return;
++        String token = p.getString("token", null);
++        p.edit().putBoolean("pending", false).remove("token").commit(); // used once, never kept on disk
++        if (token == null || System.currentTimeMillis() - p.getLong("at", 0) > FRESH_MS) return; // stale request: ignore
++        try {
++            String name = p.getString("name", "Player"), uuid = p.getString("uuid", ""), server = p.getString("server", "");
++            String version = p.getString("version", "1.21.11");
++            MinecraftAccount acc = new MinecraftAccount();
++            acc.accessToken = token;
++            acc.profileId = uuid;
++            acc.username = name;
++            acc.xuid = "0";
++            // Not a Microsoft account from this launcher's point of view: AFK Bot owns the Microsoft login and sends
++            // a fresh Minecraft token every time, so this launcher must not try to refresh it with its own client id.
++            acc.isMicrosoft = false;
++            acc.expiresAt = System.currentTimeMillis() + 3 * 60 * 60 * 1000L;
++            acc.save();
++            PojavProfile.setCurrentProfile(ctx, name);
++
++            LauncherProfiles.load();
++            MinecraftProfile prof = LauncherProfiles.mainProfileJson.profiles.get(PROFILE_KEY);
++            if (prof == null) {
++                prof = new MinecraftProfile();
++                prof.name = "AFK Bot server";
++            }
++            prof.lastVersionId = version;
++            LauncherProfiles.mainProfileJson.profiles.put(PROFILE_KEY, prof);
++            LauncherProfiles.write();
++
++            SharedPreferences d = defaults(ctx);
++            d.edit().putString(LauncherPreferences.PREF_KEY_CURRENT_PROFILE, PROFILE_KEY)
++                    .putString(K_QUICKPLAY, server).putLong(K_QUICKPLAY_AT, System.currentTimeMillis())
++                    .putBoolean(K_ACTIVE, true)
++                    .commit();
++            armed = true;
++            Log.i(TAG, "Hand-off ready: " + name + " -> " + server + " on " + version);
++        } catch (Exception e) {
++            Log.e(TAG, "Couldn't prepare the hand-off", e);
++        }
++    }
++
++    /** Called once the launcher has its version list: start the game for the hand-off, if there is one. */
++    public static void launchIfArmed(final Activity a) {
++        if (!armed) return;
++        armed = false;
++        a.runOnUiThread(new Runnable() {
++            public void run() {
++                ExtraCore.setValue(ExtraConstants.LAUNCH_GAME, true);
++            }
++        });
++    }
++
++    /** Server the game should join right away, or null. Consumed: a later normal launch starts at the title screen. */
++    public static String quickPlayServer() {
++        SharedPreferences d = LauncherPreferences.DEFAULT_PREF;
++        if (d == null) return null;
++        String s = d.getString(K_QUICKPLAY, null);
++        long at = d.getLong(K_QUICKPLAY_AT, 0);
++        if (s == null) return null;
++        d.edit().remove(K_QUICKPLAY).remove(K_QUICKPLAY_AT).commit();
++        return System.currentTimeMillis() - at < 30 * 60 * 1000L && !s.trim().isEmpty() ? s.trim() : null;
++    }
++
++    /** The game has closed: give the account back to the AFK bot. Returns true if AFK Bot was opened. */
++    public static boolean resumeAfk(Context ctx) {
++        try {
++            SharedPreferences d = defaults(ctx);
++            if (!d.getBoolean(K_ACTIVE, false)) return false;
++            d.edit().putBoolean(K_ACTIVE, false).commit();
++            Intent i = new Intent("app.afkbot.action.RESUME_AFK");
++            i.setClassName("app.afkbot", "app.afkbot.ResumeAfk");
++            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
++            ctx.startActivity(i);
++            return true;
++        } catch (Exception e) {
++            Log.e(TAG, "Couldn't reopen AFK Bot", e);
++            return false;
++        }
++    }
++
++    private static SharedPreferences defaults(Context ctx) {
++        SharedPreferences d = LauncherPreferences.DEFAULT_PREF;
++        return d != null ? d : PreferenceManager.getDefaultSharedPreferences(ctx);
++    }
++}
+diff --git a/app_pojavlauncher/src/main/java/net/kdt/pojavlaunch/afkbot/HandoffActivity.java b/app_pojavlauncher/src/main/java/net/kdt/pojavlaunch/afkbot/HandoffActivity.java
+new file mode 100644
+index 0000000..b4014af
+--- /dev/null
++++ b/app_pojavlauncher/src/main/java/net/kdt/pojavlaunch/afkbot/HandoffActivity.java
+@@ -0,0 +1,36 @@
++package net.kdt.pojavlaunch.afkbot;
++
++import android.app.Activity;
++import android.content.Intent;
++import android.os.Bundle;
++import android.widget.Toast;
++
++import net.kdt.pojavlaunch.TestStorageActivity;
++
++/**
++ * Entry point used by the AFK Bot app ("Play" button): it hands over the Minecraft login it already has, the server
++ * and its game version. Only apps signed with the same key can start this activity (signature permission), so the
++ * login never leaves the user's own two apps.
++ *
++ * We only store the request here and then go through the launcher's normal start-up (storage check, unpacking the
++ * runtime components), so the very first launch works too. AfkBotHandoff does the rest once the launcher is up.
++ */
++public class HandoffActivity extends Activity {
++    @Override
++    protected void onCreate(Bundle savedInstanceState) {
++        super.onCreate(savedInstanceState);
++        Intent in = getIntent();
++        String token = in.getStringExtra("accessToken"), uuid = in.getStringExtra("uuid"), name = in.getStringExtra("name");
++        String server = in.getStringExtra("server"), version = in.getStringExtra("version");
++        if (token == null || uuid == null || name == null || server == null) {
++            Toast.makeText(this, "AFK Bot didn't send a login - open Play from AFK Bot again", Toast.LENGTH_LONG).show();
++            finish();
++            return;
++        }
++        AfkBotHandoff.store(this, token, uuid, name, server, version == null || version.isEmpty() ? "1.21.11" : version);
++        Intent start = new Intent(this, TestStorageActivity.class);
++        start.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
++        startActivity(start);
++        finish();
++    }
++}
+diff --git a/app_pojavlauncher/src/main/jni/stdio_is.c b/app_pojavlauncher/src/main/jni/stdio_is.c
+index 6c95641..882fd63 100644
+--- a/app_pojavlauncher/src/main/jni/stdio_is.c
++++ b/app_pojavlauncher/src/main/jni/stdio_is.c
+@@ -112,11 +112,10 @@ _Noreturn void nominal_exit(int code, bool is_signal) {
+         // I mean, if Zygote can do that, why can't I?
+         killpg(getpgrp(), SIGTERM);
+     }
+-    if(code != 0) {
+-        // Exit code 0 is pretty established as "eh it's fine"
+-        // so only open the GUI if the code is != 0
+-        (*env)->CallStaticVoidMethod(env, exitTrap_exitClass, exitTrap_staticMethod, exitTrap_ctx, code, is_signal);
+-    }
++    // Always tell Java: for code 0 it shows nothing, but it lets the AFK Bot hand-off know the game has closed
++    // (ExitActivity.showExitMessage only opens the error dialog for a non-zero code)
++    (*env)->CallStaticVoidMethod(env, exitTrap_exitClass, exitTrap_staticMethod, exitTrap_ctx, code, is_signal);
++    if((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+     // Delete the reference, not gonna need 'em later anyway
+     (*env)->DeleteGlobalRef(env, exitTrap_ctx);
+     (*env)->DeleteGlobalRef(env, exitTrap_exitClass);

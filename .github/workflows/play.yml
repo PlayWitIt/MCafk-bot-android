@@ -1,0 +1,86 @@
+name: Build Play APK
+
+# "AFK Bot Play" = the real Minecraft: Java Edition client for Android, built from Amethyst
+# (https://github.com/AngelAuraMC/Amethyst-Android, LGPL-3.0) at a pinned commit plus play/amethyst.patch,
+# which adds the hand-off from the AFK Bot app. Signed with the same key as AFK Bot so the two apps can share
+# the signature-only hand-off permission.
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "play/**"
+      - ".github/workflows/play.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get Amethyst at the pinned commit
+        run: |
+          set -e
+          SHA=$(cat play/AMETHYST_COMMIT)
+          git clone --filter=blob:none https://github.com/AngelAuraMC/Amethyst-Android.git amethyst
+          cd amethyst
+          git checkout "$SHA"
+          git submodule update --init --recursive --depth 1
+
+      - name: Apply the AFK Bot hand-off patch and signing key
+        run: |
+          set -e
+          cd amethyst
+          git apply --whitespace=nowarn ../play/amethyst.patch
+          cp ../app/afkbot-release.p12 app_pojavlauncher/afkbot-release.p12
+
+      - name: Get JRE 8 (prebuilt by Amethyst's CI)
+        uses: dawidd6/action-download-artifact@v9
+        with:
+          workflow: build.yml
+          path: amethyst/app_pojavlauncher/src/main/assets/components/jre
+          workflow_conclusion: completed
+          repo: AngelAuraMC/angelauramc-openjdk-build
+          branch: buildjre8
+          name: jre8-pojav
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          validate-wrappers: false
+          gradle-version: "9.6.1"
+
+      - name: Build release APK
+        run: |
+          set -e
+          cd amethyst
+          ./scripts/languagelist_updater.sh
+          gradle --no-daemon :app_pojavlauncher:assembleRelease
+          cp app_pojavlauncher/build/outputs/apk/release/app_pojavlauncher-release.apk ../AFKBotPlay.apk
+          ls -la ../AFKBotPlay.apk
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AFKBotPlay-apk
+          path: AFKBotPlay.apk
+
+      - name: Publish to the "play-latest" release (direct download link)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete play-latest --yes --cleanup-tag || true
+          gh release create play-latest AFKBotPlay.apk \
+            --title "AFK Bot Play (latest build)" \
+            --notes "The real Minecraft: Java Edition for Android, opened from AFK Bot's Play button. Install AFKBot.apk too. Based on Amethyst (LGPL-3.0, https://github.com/AngelAuraMC/Amethyst-Android) at $(cat play/AMETHYST_COMMIT | cut -c1-7) with play/amethyst.patch. Built from ${GITHUB_SHA::7}." \
+            --target "$GITHUB_SHA" \
+            --latest=false
