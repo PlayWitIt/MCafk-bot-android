@@ -474,6 +474,16 @@ final class NonIntel {
         changed();
     }
 
+    /** Switched on while the bot is already online: starts watching this server, with everyone online now. */
+    static void startNow(String serverLabel, Map<UUID, String> online) {
+        try {
+            joined(serverLabel);
+            for (Map.Entry<UUID, String> e : online.entrySet()) tabAdd0(e.getKey(), e.getValue());
+        } catch (RuntimeException e) {
+            Hub.log("Naughty or Nice: couldn't start (" + e + ")");
+        }
+    }
+
     /** The bot left (disconnected, kicked or stopped). */
     static synchronized void left(String reason) {
         if (!installed || server.isEmpty()) return;
@@ -749,6 +759,7 @@ final class NonIntel {
     static String send(String to, String text) {
         Bot s = Hub.bot;
         if (s == null || !World.inWorld) return "The bot has to be online to send: start AFK first.";
+        if (s.secureChat) return "This server enforces secure chat, and a whisper sent from the app would get the bot kicked. Answer from the game for now.";
         String cmd = whisperCommand.trim().replaceFirst("^/", "");
         if (cmd.isEmpty()) cmd = "w";
         String prefix = "/" + cmd + " " + to + " ";

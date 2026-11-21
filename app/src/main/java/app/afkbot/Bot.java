@@ -814,6 +814,7 @@ final class Bot {
                     p.bool();
                     p.bool();
                     onDimension(p);
+                    readSecureChat(p);
                 } catch (IOException ignored) {
                     MapData.setDimension("");
                 }
@@ -1625,6 +1626,35 @@ final class Bot {
         return playerName;
     }
 
+    /**
+     * Whether the server enforces secure (signed) chat. Then a command with a message in it (/w, /msg) sent unsigned,
+     * as this bot sends commands, gets you kicked; the Naughty or Nice add-on won't send whispers there.
+     */
+    volatile boolean secureChat;
+
+    /** The rest of the 1.20.5+ login packet after the dimension, up to its last field: "enforces secure chat". */
+    private void readSecureChat(Buf.In p) {
+        secureChat = false;
+        if (proto < 766) return;
+        try {
+            p.i64(); // hashed seed
+            p.u8(); // game mode
+            p.u8(); // previous game mode
+            p.bool(); // debug
+            p.bool(); // flat
+            if (p.bool()) { // death location
+                p.str();
+                p.i64();
+            }
+            p.varInt(); // portal cooldown
+            if (proto >= 768) p.varInt(); // sea level
+            secureChat = p.bool();
+            if (secureChat) Hub.log("This server enforces secure chat: whispers can't be sent from the app here (it would get you kicked).");
+        } catch (IOException | RuntimeException e) {
+            secureChat = false;
+        }
+    }
+
     /** Reads the dimension part of the login/respawn packet. */
     private void onDimension(Buf.In p) throws IOException {
         String name;
@@ -1727,6 +1757,41 @@ final class Bot {
         if (p.bool()) p.bytes(256);
         String msg = p.str();
         String name = World.nameOf(sender);
+        // 1.20.5+: the rest says what kind of message it is. Whispers (/w, /msg) are kinds of their own: vanilla numbers
+        // its chat kinds chat, emote, msg incoming (3), msg outgoing (4)..., and an outgoing one names who it went to.
+        int kind = -1;
+        String target = null;
+        if (proto >= 766) {
+            try {
+                p.i64(); // timestamp
+                p.i64(); // salt
+                int prev = p.varInt();
+                for (int i = 0; i < prev; i++) if (p.varInt() == 0) p.bytes(256);
+                if (p.bool()) Text.fromNbt(p); // unsigned content
+                if (p.varInt() == 2) { // partly filtered: a bit set
+                    int longs = p.varInt();
+                    for (int i = 0; i < longs; i++) p.i64();
+                }
+                kind = p.varInt();
+                if (kind != 0) {
+                    Text.fromNbt(p); // sender's display name
+                    if (p.bool()) target = Text.strip(Text.fromNbt(p)).trim();
+                }
+            } catch (IOException | RuntimeException e) {
+                kind = -1;
+            }
+        }
+        // Handed on as "X whispers to you: …" / "You whisper to X: …", which the Naughty or Nice add-on reads as DMs.
+        if (name != null && kind == 3 && target == null) {
+            Hub.chat(name + " whispers to you: " + msg);
+            emitChat(null, name + " whispers to you: " + msg, name + " whispers to you: " + msg, false);
+            return;
+        }
+        if (kind == 4 && target != null && !target.isEmpty()) {
+            Hub.chat("You whisper to " + target + ": " + msg);
+            emitChat(null, "You whisper to " + target + ": " + msg, "You whisper to " + target + ": " + msg, false);
+            return;
+        }
         Hub.chat((name != null ? "<" + name + "> " : "<?> ") + msg);
         emitChat(name, msg, (name != null ? "<" + name + "> " : "") + msg, false);
     }

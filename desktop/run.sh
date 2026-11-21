@@ -27,6 +27,7 @@ case "$mode" in
   live) exec java -cp $OUT:$CP app.afkbot.LiveTest "$@" ;;
   real) exec java -Dafk.cmd=desktop/realsrv/cmd -cp $OUT:$CP app.afkbot.RealTest "$@" ;;
   non) exec java -cp $OUT:$CP app.afkbot.NonTest "$@" ;;
+  nonlive) exec java -cp $OUT:$CP app.afkbot.NonLive "$@" ;;
   preview) exec java -Xmx1500m -Dafk.cmd=desktop/realsrv/cmd -cp $OUT:$CP app.afkbot.PreviewTest "$@" ;;
   *) echo "usage: desktop/run.sh live [server] | real <walk|far|course|physics|diag|copper|shulker> | preview [outDir]"; exit 1 ;;
 esac

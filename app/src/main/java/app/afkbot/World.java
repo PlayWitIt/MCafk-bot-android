@@ -151,6 +151,11 @@ final class World {
         NonIntel.tabRemove(u);
     }
 
+    /** Everyone on the tab list, for an add-on switched on while connected. */
+    static synchronized Map<UUID, String> names() {
+        return new HashMap<UUID, String>(NAMES);
+    }
+
     static synchronized String nameOf(UUID u) {
         return u == null ? null : NAMES.get(u);
     }
