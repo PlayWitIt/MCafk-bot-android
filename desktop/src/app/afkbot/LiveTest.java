@@ -5,7 +5,7 @@ import java.io.InputStreamReader;
 
 /**
  * Runs the app's real bot code on a PC against a real server (e.g. constantiam.net) with a real Microsoft account,
- * and lets you (or Claude Code) drive it from the terminal to reproduce bugs.
+ * and lets you drive it from the terminal to reproduce bugs.
  *
  *   desktop/run.sh live [server]        (default constantiam.net)
  *   desktop/run.sh live 127.0.0.1:25601 --offline Tester   (local test server from desktop/realserver.sh)

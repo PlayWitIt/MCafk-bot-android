@@ -24,4 +24,13 @@ To update Amethyst, change `AMETHYST_COMMIT`, check that `git apply --check` sti
 
 ## License
 
-Amethyst is LGPL-3.0, and its components carry their own licenses (OpenJDK GPLv2+CE, LWJGL BSD, GL4ES/Mesa MIT, OpenAL-Soft GPLv2, ...; see Amethyst's README). Our changes to it are exactly `amethyst.patch`, published here under the same LGPL-3.0, together with the upstream commit they apply to. Minecraft itself is downloaded from Mojang on the phone and needs an account that owns the game. Nothing from Mojang is bundled.
+Amethyst is LGPL-3.0 ([LICENSE.LGPL-3.0](LICENSE.LGPL-3.0), which builds on the GPL-3.0 in [COPYING.GPL-3.0](COPYING.GPL-3.0)). Its components keep their own licenses: OpenJDK GPLv2+CE, LWJGL BSD, GL4ES/Mesa MIT, MobileGlues LGPL-2.1, OpenAL-Soft GPLv2 and more, listed in Amethyst's README and shipped in the app's `assets/licenses`.
+
+AFK Bot Play is a modified version of Amethyst. Our changes are exactly `amethyst.patch`, applied to the upstream commit in `AMETHYST_COMMIT`, and are released under the same LGPL-3.0. The patch:
+- adds `assets/licenses/AFKBOT_PLAY_NOTICE.txt` to the app, saying what was changed, when, and where this source is
+- ships Amethyst's LGPL-3.0 and the GPL-3.0 texts in the app
+- marks every modified file with a "Modified for AFK Bot Play" line at the top
+
+Credit for the launcher, the Android Java runtime and the rendering work goes to the [Amethyst](https://github.com/AngelAuraMC/Amethyst-Android), [PojavLauncher](https://github.com/PojavLauncherTeam/PojavLauncher) and [Boardwalk](https://github.com/zhuowei/Boardwalk) authors and the projects they build on.
+
+Minecraft is a trademark of Mojang Synergies AB. The game is downloaded from Mojang on the phone and needs an account that owns it; nothing from Mojang is bundled. Not affiliated with or endorsed by Mojang, Microsoft or the Amethyst project.

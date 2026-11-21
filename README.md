@@ -36,3 +36,16 @@ Locally: `gradle :app:assembleRelease` with the Android SDK installed.
 
 `tools/gen_proto.py` regenerates `Proto.java` (packet IDs per version) from the
 [minecraft-data](https://github.com/PrismarineJS/minecraft-data) npm package.
+
+## Play the real game (optional)
+
+**AFK Bot Play** is an optional second app that runs the real Minecraft: Java Edition on the phone. AFK Bot's Play button hands it your login and server; the bot steps aside while you play and rejoins when you quit. It is a modified version of [Amethyst](https://github.com/AngelAuraMC/Amethyst-Android). See [play/README.md](play/README.md).
+
+## Credits & licenses
+
+- [Mozilla Rhino](https://github.com/mozilla/rhino): JavaScript engine for script mods, used unmodified ([MPL 2.0](app/src/main/assets/licenses/rhino-MPL-2.0.txt))
+- [minecraft-data](https://github.com/PrismarineJS/minecraft-data) by PrismarineJS: protocol, block and item data that `Proto.java` and `assets/proto` are generated from ([MIT](app/src/main/assets/licenses/minecraft-data-MIT.txt))
+- AFK Bot Play: a modified version of [Amethyst](https://github.com/AngelAuraMC/Amethyst-Android) by AngelAuraMC, based on [PojavLauncher](https://github.com/PojavLauncherTeam/PojavLauncher) and Boardwalk, under the [LGPL 3.0](play/LICENSE.LGPL-3.0) (with the [GPL 3.0](play/COPYING.GPL-3.0)); its components keep their own licenses
+- Block textures and mob models are downloaded from Mojang on the phone at runtime; none are included in this repository or the app
+
+Minecraft is a trademark of Mojang Synergies AB. This project is not affiliated with or endorsed by Mojang or Microsoft.

@@ -2106,6 +2106,21 @@ public class MainActivity extends Activity implements Hub.Listener {
                 .show();
     }
 
+    private void licenseChip(LinearLayout parent, final String title, final String asset) {
+        actionChip(parent, title, new Runnable() {
+            public void run() {
+                try {
+                    java.io.InputStream in = getAssets().open(asset);
+                    String t = ModStore.readAll(in);
+                    in.close();
+                    showText(title, t);
+                } catch (Exception e) {
+                    toast("Couldn't open " + asset);
+                }
+            }
+        });
+    }
+
     private void showText(String title, String body) {
         TextView t = text(body, 12, TEXT, false);
         t.setTypeface(Typeface.MONOSPACE);
@@ -2738,6 +2753,28 @@ public class MainActivity extends Activity implements Hub.Listener {
         fullLog.setTextIsSelectable(true);
         logScroll.addView(fullLog);
         lc.addView(logScroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(300)));
+
+        // credits for what we build on, with their licenses
+        LinearLayout cr = card(col);
+        cr.addView(text("Credits & licenses", 16, TEXT, true));
+        cr.addView(text("AFK Bot is built with:\n"
+                + "\u2022 Mozilla Rhino - runs script mods (MPL 2.0)\n"
+                + "\u2022 minecraft-data by PrismarineJS - packet and block data (MIT)\n"
+                + "\u2022 AFK Bot Play (optional add-on) is a modified version of Amethyst by AngelAuraMC, based on PojavLauncher (LGPL 3.0)\n\n"
+                + "Block textures and mob models are downloaded from Mojang on your phone; none are included in the app. "
+                + "Minecraft is a trademark of Mojang Synergies AB. AFK Bot is not affiliated with or endorsed by Mojang or Microsoft.", 12, MUTED, false));
+        LinearLayout lic = chipRow(cr);
+        licenseChip(lic, "Rhino license", "licenses/rhino-MPL-2.0.txt");
+        licenseChip(lic, "minecraft-data license", "licenses/minecraft-data-MIT.txt");
+        actionChip(lic, "Amethyst source", new Runnable() {
+            public void run() {
+                try {
+                    startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/AngelAuraMC/Amethyst-Android")));
+                } catch (Exception e) {
+                    toast("No browser found");
+                }
+            }
+        });
 
         String ver = "";
         try {

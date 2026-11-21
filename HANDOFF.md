@@ -1,6 +1,6 @@
 # Handoff: AFK Bot (Android) — continue on a Linux PC
 
-Read this first if you're a new Claude Code session (or a developer) picking this project up.
+Read this first if you're picking this project up.
 
 ## Why the PC
 
