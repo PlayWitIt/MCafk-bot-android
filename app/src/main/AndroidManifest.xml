@@ -10,16 +10,6 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
-    <!-- Play mode hand-off with "AFK Bot Play" (the real game): only apps signed with our key can use it -->
-    <permission
-        android:name="app.afkbot.permission.HANDOFF"
-        android:label="Pass your Minecraft login between AFK Bot apps"
-        android:protectionLevel="signature" />
-    <uses-permission android:name="app.afkbot.permission.HANDOFF" />
-    <queries>
-        <package android:name="app.afkbot.play" />
-    </queries>
-
     <application
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
@@ -37,18 +27,6 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <!-- AFK Bot Play opens this when the game closes, so the bot can take the account back -->
-        <activity-alias
-            android:name=".ResumeAfk"
-            android:exported="true"
-            android:permission="app.afkbot.permission.HANDOFF"
-            android:targetActivity=".MainActivity">
-            <intent-filter>
-                <action android:name="app.afkbot.action.RESUME_AFK" />
-                <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
-        </activity-alias>
 
         <service
             android:name=".AfkService"

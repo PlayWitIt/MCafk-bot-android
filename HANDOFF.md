@@ -22,9 +22,8 @@ every move against vanilla physics, so anything not bit-exact gets set back.
    never accepted our movement, so it still thought the player was at the join spot, too far away to open anything.
    That would also explain why a nearby axe scrape worked. It works on the local vanilla server (`copper`, `shulker`).
    **The user's base is sensitive: on Constantiam only walk, jump and sprint unless the user explicitly allows more.**
-3. **Play mode (v7.6):** "AFK Bot Play" is a second app that runs the real Java Edition. It is built from Amethyst plus
-   `play/amethyst.patch` by `.github/workflows/play.yml`, and the AFK app hands its login to it. See
-   `play/README.md`. **It has not been tested on a phone yet.**
+3. **Play mode:** the user wants it built entirely in this app, with no third-party launcher. The Amethyst-based
+   add-on from v7.6/v7.7 was removed. Play mode is being written from scratch as an experimental feature.
 
 Commits are authored as "PlayWit Creations". Don't add tool attribution or co-author lines anywhere.
 
