@@ -60,12 +60,6 @@ final class Slot {
         }
     }
 
-    /** This process's name, for showing which bot's storage is in use. */
-    static String processLabel() {
-        String p = processName();
-        return p == null ? "?" : p;
-    }
-
     /** Names of per-slot preference files: slot 0 keeps the original names, so existing sign-ins and settings stay. */
     static String prefs(String base) {
         int s = current();
@@ -97,11 +91,6 @@ final class Slot {
     /** This slot's Play screen. */
     static Class<?> gameActivity() {
         return slotClass("GameActivity", current());
-    }
-
-    /** This slot's Microsoft sign-in screen. */
-    static Class<?> loginActivity() {
-        return slotClass("LoginActivity", current());
     }
 
     /** This slot's bot service. */
