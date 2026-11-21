@@ -23,6 +23,7 @@ final class ModStore {
         if (initialised) return;
         initialised = true;
         final Context app = ctx.getApplicationContext();
+        NonIntel.init(new File(app.getFilesDir(), "non"));
         ModEngine.host = new Host(app);
         EntityModels.init(app);
         Hub.versionLoader = new Hub.VersionLoader() {

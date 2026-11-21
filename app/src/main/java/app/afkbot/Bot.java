@@ -1607,12 +1607,14 @@ final class Bot {
         try {
             JSONObject o = new JSONObject().put("message", message).put("raw", raw).put("system", system);
             if (sender != null) o.put("sender", sender);
+            NonIntel.chat(sender, message, raw, system);
             ModEngine.emit("chat", o);
         } catch (org.json.JSONException ignored) {
         }
     }
 
     private static void emitMod(String event, String key, Object value) {
+        NonIntel.botEvent(event, value == null ? null : String.valueOf(value));
         try {
             ModEngine.emit(event, new JSONObject().put(key, value));
         } catch (org.json.JSONException ignored) {
@@ -1642,6 +1644,7 @@ final class Bot {
         String name = World.label(e);
         boolean friend = cfg.friendSet().contains(name);
         double d = distanceTo(e);
+        NonIntel.seen(name, e.x, e.y, e.z, d, World.dimension);
         try {
             ModEngine.emit("playerEnter", new JSONObject().put("name", name).put("distance", Math.round(d)).put("friend", friend));
         } catch (org.json.JSONException ignored) {
@@ -2008,7 +2011,10 @@ final class Bot {
         // 1.21.2+ clients end every tick with this packet; anticheats use it to line up movement
         if (proto >= 768 && id(Proto.P_S_TICK_END) >= 0) send(new Buf(id(Proto.P_S_TICK_END)));
         if (detail) updateDetail();
-        if (tick % 20 == 0) ModEngine.emit("second", null);
+        if (tick % 20 == 0) {
+            ModEngine.emit("second", null);
+            if (NonIntel.installed) NonIntel.second(World.snapshot(null));
+        }
         if (tick % 200 == 0) MapData.trim(World.selfX, World.selfZ, Math.max(cfg.viewDistance, Hub.serverViewDistance) + 3);
     }
 

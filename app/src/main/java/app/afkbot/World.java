@@ -142,11 +142,13 @@ final class World {
     static synchronized void putName(UUID u, String name) {
         NAMES.put(u, name);
         tabCount = NAMES.size();
+        NonIntel.tabAdd(u, name);
     }
 
     static synchronized void removeName(UUID u) {
         NAMES.remove(u);
         tabCount = NAMES.size();
+        NonIntel.tabRemove(u);
     }
 
     static synchronized String nameOf(UUID u) {
