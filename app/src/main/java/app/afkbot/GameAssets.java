@@ -27,6 +27,7 @@ final class GameAssets {
                 || n.startsWith("assets/minecraft/textures/gui/sprites/widget/button")
                 || n.startsWith("assets/minecraft/textures/entity/player/wide/") || n.startsWith("assets/minecraft/textures/entity/player/slim/")
                 || n.startsWith("assets/minecraft/textures/colormap/")
+                || n.startsWith("data/minecraft/worldgen/biome/") // biome climate and colours
                 || n.equals("assets/minecraft/textures/entity/zombie/zombie.png") || n.equals("assets/minecraft/textures/entity/skeleton/skeleton.png")
                 || n.equals("assets/minecraft/textures/entity/skeleton/wither_skeleton.png") || n.equals("assets/minecraft/textures/entity/creeper/creeper.png")
                 || n.equals("assets/minecraft/textures/entity/piglin/piglin.png") || n.equals("assets/minecraft/textures/entity/shield_base_nopattern.png");

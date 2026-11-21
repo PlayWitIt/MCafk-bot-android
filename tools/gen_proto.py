@@ -22,6 +22,7 @@ SPEC=[
  ('C_C_COOKIE_REQ','configuration','toClient',['cookie_request']),
  ('C_C_RESOURCE_PACK','configuration','toClient',['add_resource_pack','resource_pack_send']),
  ('C_C_CODE_OF_CONDUCT','configuration','toClient',['code_of_conduct']),
+ ('C_C_REGISTRY_DATA','configuration','toClient',['registry_data']),
  ('C_S_FINISH','configuration','toServer',['finish_configuration']),
  ('C_S_KEEPALIVE','configuration','toServer',['keep_alive']),
  ('C_S_PONG','configuration','toServer',['pong']),

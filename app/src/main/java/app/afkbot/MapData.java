@@ -198,6 +198,23 @@ final class MapData {
             }
     }
 
+    /** Biome id (index into GameState.biomeNames) at a block, or -1 if unknown. Biomes are stored per 4x4x4 cell. */
+    static int biomeAt(int wx, int wy, int wz) {
+        Chunk c = CHUNKS.get(key(wx >> 4, wz >> 4));
+        if (c == null || c.secs == null) return -1;
+        int y = wy - minY;
+        int si = y >> 4;
+        if (y < 0 || si >= c.secs.length) return -1;
+        Section b = c.secs[si].biomes;
+        if (b == null) return -1;
+        if (b.single >= 0) return b.single;
+        int idx = (((y & 15) >> 2) * 4 + ((wz & 15) >> 2)) * 4 + ((wx & 15) >> 2);
+        int per = 64 / b.bits;
+        long v = (b.data[idx / per] >>> ((idx % per) * b.bits)) & ((1L << b.bits) - 1);
+        if (b.palette != null) return v < b.palette.length ? b.palette[(int) v] : -1;
+        return (int) v;
+    }
+
     /** True if a chunk section is known to be all air (nothing to mesh). */
     static boolean sectionEmpty(int cx, int sy, int cz) {
         Chunk c = CHUNKS.get(key(cx, cz));
@@ -596,6 +613,7 @@ final class MapData {
     // ----- chunk sections -----
 
     static final class Section {
+        Section biomes; // 4x4x4 biome ids (Play screen only), or null
         int[] direct; // set once a block in this section changes
         int single = -1;
         int[] palette;
@@ -610,7 +628,8 @@ final class MapData {
             if (list.size() > 64) throw new IOException("too many sections");
             in.u16(); // non-empty block count
             Section s = readContainer(in, 4096, 8, prefix);
-            readContainer(in, 64, 3, prefix); // biomes (skipped)
+            Section bio = readContainer(in, 64, 3, prefix); // biomes: kept only for the Play screen's colours
+            if (keepLight) s.biomes = bio;
             list.add(s);
         }
         if (in.remaining() != 0 || list.isEmpty()) throw new IOException("section size mismatch");

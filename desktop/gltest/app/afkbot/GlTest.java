@@ -13,6 +13,7 @@ import java.util.Map;
 public class GlTest {
     static final int W = 1600, H = 720; // a 2400x1080 phone's proportions (with -Dafk.density=1.83)
     static GameHud hud;
+    static GameBiomes loadedBiomes;
 
     public static void main(String[] args) throws Throwable {
         String out = args.length > 0 ? args[0] : "desktop/preview";
@@ -24,6 +25,7 @@ public class GlTest {
         Map<String, byte[]> files = PreviewTest.Textures.files(Hub.versionName);
         GameAtlas atlas = GameAtlas.build(files, new PreviewTest.Textures.Awt());
         GameAssetStore.loadLanguage(files);
+        loadedBiomes = new GameBiomes(files, new PreviewTest.Textures.Awt());
         System.out.println("[GL] animated textures: " + atlas.anims.size());
         System.out.println("[GL] translated: " + Text.flatten(new org.json.JSONObject("{\"translate\":\"death.attack.mob\",\"with\":[\"Tester\",{\"translate\":\"entity.minecraft.slime\"}]}").toMap()));
         GameModels models = new GameModels(files, atlas, vd);
@@ -32,6 +34,11 @@ public class GlTest {
         // something to show in the hotbar, and a few hearts missing
         for (String g : new String[]{"diamond_sword", "oak_planks 64", "torch 32", "grass_block 12", "apple 5", "oak_log 20", "glass 16", "bow", "furnace"})
             PreviewTest.cmd("give Tester minecraft:" + g);
+        PreviewTest.cmd("fillbiome -6 -64 -6 2 -40 22 minecraft:swamp");
+        PreviewTest.cmd("fillbiome 12 -64 -6 22 -40 22 minecraft:jungle");
+        Thread.sleep(500);
+        b.reloadTerrain(); // fillbiome's changes come in a separate packet: just have the chunks sent again
+        Thread.sleep(3000);
         PreviewTest.cmd("gamerule doMobSpawning false");
         PreviewTest.cmd("kill @e[type=slime]");
         PreviewTest.cmd("effect give Tester minecraft:resistance infinite 255 true");
@@ -61,6 +68,7 @@ public class GlTest {
         hud.assets = loaded;
         hud.setDesktopSize(W, H);
         MapData.changes = r;
+        loaded.biomes = loadedBiomes;
         r.assets = loaded;
         r.renderDistance = 4;
         r.onSurfaceCreated(null, null);

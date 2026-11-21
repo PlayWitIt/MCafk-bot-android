@@ -41,7 +41,11 @@ final class GameMesher {
     // ---- per block state classification (computed once per state) ----
     private static final int F_KNOWN = 1, F_AIR = 2, F_OPAQUE = 4, F_SAMECULL = 8, F_WATER = 16, F_LAVA = 32,
             F_CHEST = 128, F_WATERLOGGED = 256, F_INVISIBLE = 512, F_TRANSLUCENT = 1024;
-    private final int[] info, blockOf, tintOf, chestOf;
+    private final int[] info, blockOf, tintOf, chestOf, biomeKind;
+    /** Biome colours (grass, foliage, water), or null for the fixed plains colours. */
+    GameBiomes biomes;
+    private int originX, originY, originZ;
+    private final java.util.HashMap<Long, Integer> tintCache = new java.util.HashMap<Long, Integer>();
     private final GameAtlas atlas;
     private final GameModels models;
     private final ProtoDef.VersionData vd;
@@ -56,6 +60,7 @@ final class GameMesher {
         blockOf = new int[states];
         tintOf = new int[states];
         chestOf = new int[states];
+        biomeKind = new int[states];
         waterTile = Math.max(0, atlas.tile("block/water_still"));
         lavaTile = Math.max(0, atlas.tile("block/lava_still"));
     }
@@ -69,6 +74,7 @@ final class GameMesher {
         blockOf[st] = b;
         String id = b >= 0 && b < vd.blockIds.length ? vd.blockIds[b] : "";
         tintOf[st] = TexturePack.tintFor(id);
+        biomeKind[st] = GameBiomes.kindOf(id);
         i = F_KNOWN;
         if (id.equals("air") || id.equals("cave_air") || id.equals("void_air")) i |= F_AIR;
         else if (id.equals("barrier") || id.equals("light") || id.equals("structure_void") || id.equals("moving_piston")) i |= F_INVISIBLE;
@@ -154,6 +160,10 @@ final class GameMesher {
         if (MapData.sectionEmpty(sx, sy, sz)) return m; // all air: nothing to draw (neighbours draw their own faces)
         if (!snapshot(sx, sy, sz)) return null;
         len[0] = len[1] = len[2] = 0;
+        originX = sx << 4;
+        originY = sy << 4;
+        originZ = sz << 4;
+        tintCache.clear();
         for (int y = 0; y < 16; y++)
             for (int z = 0; z < 16; z++)
                 for (int x = 0; x < 16; x++) {
@@ -182,6 +192,30 @@ final class GameMesher {
     private static final float[] SHADE = {1f, 0.5f, 0.8f, 0.8f, 0.6f, 0.6f};
     private static final float[] AO = {0.42f, 0.6f, 0.8f, 1f};
 
+    /**
+     * A block's biome colour, blended over the 3x3 columns around it (like the game's biome blending, so colours fade
+     * across biome borders instead of changing in a hard line). kind 0 = a fixed tint.
+     */
+    private int biomeTint(int kind, int x, int y, int z, int fallback) {
+        GameBiomes b = biomes;
+        if (kind == 0 || b == null) return fallback;
+        long key = ((long) (x + 1) << 20) | ((long) (z + 1) << 12) | ((long) ((y + 4) >> 2) << 4) | kind;
+        Integer have = tintCache.get(key);
+        if (have != null) return have;
+        int wx = originX + x, wy = originY + y, wz = originZ + z, r = 0, g = 0, bl = 0, n = 0;
+        for (int dx = -1; dx <= 1; dx++)
+            for (int dz = -1; dz <= 1; dz++) {
+                int c = b.color(kind, MapData.biomeAt(wx + dx * 2, wy, wz + dz * 2), fallback);
+                r += (c >> 16) & 255;
+                g += (c >> 8) & 255;
+                bl += c & 255;
+                n++;
+            }
+        int c = (r / n) << 16 | (g / n) << 8 | (bl / n);
+        tintCache.put(key, c);
+        return c;
+    }
+
     /** Is the face of block s towards direction d hidden by its neighbour? */
     private boolean hidden(int x, int y, int z, int s, int f, int d) {
         int[] v = DIR[d];
@@ -202,7 +236,7 @@ final class GameMesher {
             if (q.cull >= 0 && hidden(x, y, z, s, f, q.cull)) continue;
             int pass = (f & F_OPAQUE) != 0 && q.alpha == GameAtlas.OPAQUE ? OPAQUE
                     : (f & F_TRANSLUCENT) != 0 || q.alpha == GameAtlas.TRANSLUCENT ? TRANSLUCENT : CUTOUT;
-            int color = q.tint && tintOf[s] != 0 ? tintOf[s] : 0xFFFFFF;
+            int color = q.tint && tintOf[s] != 0 ? biomeTint(biomeKind[s], x, y, z, tintOf[s]) : 0xFFFFFF;
             emit(pass, x, y, z, q.pos, q.uv, q.dir, q.shade ? SHADE[q.shadeDir] : 1f, q.ao, color, 255);
         }
     }
@@ -335,7 +369,7 @@ final class GameMesher {
             if (same || (nf & F_OPAQUE) != 0) continue;
             if (d == UP && fullAbove) continue;
             float[][] c = cornersOf(d, box);
-            emit(lava ? OPAQUE : TRANSLUCENT, x, y, z, c, tileUv(tile, d, box), d, SHADE[d], true, lava ? 0xFFFFFF : 0x3F76E4, lava ? 255 : 200);
+            emit(lava ? OPAQUE : TRANSLUCENT, x, y, z, c, tileUv(tile, d, box), d, SHADE[d], true, lava ? 0xFFFFFF : biomeTint(GameBiomes.WATER, x, y, z, 0x3F76E4), lava ? 255 : 200);
         }
     }
 

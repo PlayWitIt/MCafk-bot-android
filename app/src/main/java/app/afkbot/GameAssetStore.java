@@ -34,6 +34,7 @@ final class GameAssetStore {
         final GameAtlas atlas;
         final GameModels models;
         final Bitmap atlasBitmap;
+        volatile GameBiomes biomes; // biome colours (grass, foliage, water)
 
         Loaded(String version, Map<String, byte[]> files, GameAtlas atlas, GameModels models, Bitmap atlasBitmap) {
             this.version = version;
@@ -104,6 +105,7 @@ final class GameAssetStore {
         Bitmap bmp = Bitmap.createBitmap(atlas.pixels, GameAtlas.SIZE, GameAtlas.SIZE, Bitmap.Config.ARGB_8888);
         status = "Ready";
         Loaded l = new Loaded(version, files, atlas, new GameModels(files, atlas, vd), bmp);
+        l.biomes = new GameBiomes(files, IMAGES);
         current = l;
         return l;
     }

@@ -396,6 +396,9 @@ final class GameRenderer implements GLSurfaceView.Renderer, MapData.Changes {
                             m = new GameMesher(Hub.versionData, a.atlas, a.models);
                             mesher.set(m);
                         }
+                        if (m.biomes != a.biomes) {
+                            m.biomes = a.biomes;
+                        }
                         GameMesher.Mesh mesh = m.build((int) c[2], (int) c[3], (int) c[4]);
                         if (mesh != null) ready.add(mesh);
                     } catch (Throwable ignored) {

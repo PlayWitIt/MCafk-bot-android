@@ -745,6 +745,26 @@ final class Bot {
             send(new Buf(id(Proto.C_S_COOKIE_RESP)).str(p.str()).bool(false));
         } else if (pid == id(Proto.C_C_RESOURCE_PACK)) {
             answerResourcePack(p, id(Proto.C_S_RESOURCE_PACK));
+        } else if (pid == id(Proto.C_C_REGISTRY_DATA) && proto >= 766) {
+            // remember the biome list (biome ids in chunks are positions in it) for the Play screen's colours
+            try {
+                String reg = p.str();
+                if (reg.equals("minecraft:worldgen/biome")) {
+                    int n = p.varInt();
+                    String[] names = new String[Math.max(0, Math.min(n, 4096))];
+                    for (int i = 0; i < names.length; i++) {
+                        String key = p.str();
+                        names[i] = key.startsWith("minecraft:") ? key.substring(10) : key;
+                        if (p.bool()) { // inline data (servers without the vanilla pack): skip it
+                            int t = p.u8();
+                            if (t != 0) MapData.skipNbt(p, t);
+                        }
+                    }
+                    GameState.biomeNames = names;
+                }
+            } catch (IOException ignored) {
+                // never let this stop the login
+            }
         } else if (pid == id(Proto.C_C_CODE_OF_CONDUCT)) {
             Hub.log("Server code of conduct: " + firstLine(p.str()));
             send(new Buf(id(Proto.C_S_ACCEPT_COC)));

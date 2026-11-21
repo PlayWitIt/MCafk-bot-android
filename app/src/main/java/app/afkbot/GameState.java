@@ -26,6 +26,8 @@ final class GameState {
     /** World age in ticks (from the time packet; drives cloud drift). */
     static volatile long worldAge, worldAgeAt = System.currentTimeMillis();
     static volatile float rain;
+    /** The server's biome list (biome ids in chunk data index into it), from its registry data; null if unknown. */
+    static volatile String[] biomeNames;
     /** 0 survival, 1 creative, 2 adventure, 3 spectator. */
     static volatile int gameMode;
 
