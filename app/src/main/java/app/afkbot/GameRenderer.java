@@ -2,7 +2,6 @@ package app.afkbot;
 
 import android.opengl.GLES20;
 import android.opengl.GLSurfaceView;
-import android.opengl.GLUtils;
 import android.opengl.Matrix;
 
 import java.nio.ByteBuffer;
@@ -470,7 +469,13 @@ final class GameRenderer implements GLSurfaceView.Renderer, MapData.Changes {
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_NEAREST);
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
-        GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, a.atlasBitmap, 0);
+        // straight (not premultiplied) RGBA from the atlas pixels: Android's GLUtils would upload a premultiplied
+        // bitmap, which makes translucent textures (water, stained glass) too dark with our blending
+        int[] px = a.atlas.pixels;
+        ByteBuffer rgba = ByteBuffer.allocateDirect(px.length * 4).order(ByteOrder.nativeOrder());
+        for (int p : px) rgba.put((byte) (p >> 16)).put((byte) (p >> 8)).put((byte) p).put((byte) (p >>> 24));
+        rgba.position(0);
+        GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, GameAtlas.SIZE, GameAtlas.SIZE, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, rgba);
         uploaded = a;
         markAll();
     }
@@ -502,52 +507,23 @@ final class GameRenderer implements GLSurfaceView.Renderer, MapData.Changes {
     // ---- what the crosshair points at ----
 
     private void pickTarget(float dx, float dy, float dz) {
-        int[] hit = World3DView.raycast(camX, camY, camZ, dx, dy, dz, reach + 1);
-        double blockT = Double.MAX_VALUE;
-        if (hit != null) {
-            double cx = hit[0] + 0.5 - camX, cy = hit[1] + 0.5 - camY, cz = hit[2] + 0.5 - camZ;
-            blockT = cx * dx + cy * dy + cz * dz - 0.5; // close enough: distance to the block along the ray
-            if (Math.sqrt(cx * cx + cy * cy + cz * cz) > reach + 0.9) {
-                hit = null;
-                blockT = Double.MAX_VALUE;
-            }
-        }
+        int[] hit = GameRay.cast(camX, camY, camZ, dx, dy, dz, reach);
+        double blockT = hit == null ? Double.MAX_VALUE : hit[4] / 1000.0;
         World.Dot best = null;
         double bestT = Math.min(blockT, reach);
         double px = World.selfX, py = World.selfY, pz = World.selfZ;
         for (World.Dot d : World.snapshot(null)) {
-            if (d.kind == 'i' || d.dist > reach + 2) continue;
+            if (d.kind == 'i' || d.dist > reach + 3) continue;
             double w = d.kind == 'a' ? 0.9 : 0.6, h = d.kind == 'a' ? 1.0 : 1.8;
-            double ex = px + d.dx - camX, ey = py + d.dy - camY, ez = pz + d.dz - camZ;
-            double t = rayBox(dx, dy, dz, ex - w / 2, ey, ez - w / 2, ex + w / 2, ey + h, ez + w / 2);
-            if (t >= 0 && t < bestT) {
-                bestT = t;
+            double ex = px + d.dx, ey = py + d.dy, ez = pz + d.dz;
+            double[] t = GameRay.box(camX, camY, camZ, dx, dy, dz, ex - w / 2, ey, ez - w / 2, ex + w / 2, ey + h, ez + w / 2);
+            if (t != null && t[0] < bestT) {
+                bestT = t[0];
                 best = d;
             }
         }
         targetEntity = best;
-        targetBlock = best != null ? null : hit;
-    }
-
-    private static double rayBox(double dx, double dy, double dz, double x0, double y0, double z0, double x1, double y1, double z1) {
-        double tmin = 0, tmax = 1e9;
-        double[] o = {0, 0, 0}, d = {dx, dy, dz}, lo = {x0, y0, z0}, hi = {x1, y1, z1};
-        for (int a = 0; a < 3; a++) {
-            if (Math.abs(d[a]) < 1e-9) {
-                if (o[a] < lo[a] || o[a] > hi[a]) return -1;
-                continue;
-            }
-            double t1 = (lo[a] - o[a]) / d[a], t2 = (hi[a] - o[a]) / d[a];
-            if (t1 > t2) {
-                double t = t1;
-                t1 = t2;
-                t2 = t;
-            }
-            tmin = Math.max(tmin, t1);
-            tmax = Math.min(tmax, t2);
-            if (tmin > tmax) return -1;
-        }
-        return tmin;
+        targetBlock = best != null || hit == null ? null : new int[]{hit[0], hit[1], hit[2], hit[3]};
     }
 
     // ---- overlays: outline, cracks, entities ----

@@ -28,68 +28,10 @@ public class PreviewTest {
     public static void main(String[] a) throws Exception {
         String outDir = a.length > 0 ? a[0] : "desktop/preview";
         new File(outDir).mkdirs();
-        Hub.versionLoader = new Hub.VersionLoader() {
-            public ProtoDef.VersionData load(int p) throws Exception {
-                return ProtoDef.load(new java.io.FileInputStream("app/src/main/assets/proto/" + p + ".json"));
-            }
-        };
-        MapData.keepLight = true;
-        GameState.open = true;
-        Bot.Config c = new Bot.Config();
-        c.address = "127.0.0.1:25601";
-        c.offline = true;
-        c.offlineName = "Tester";
-        c.antiAfk = false;
-        c.autoReconnect = false;
-        c.autoLog = false;
-        c.visualRange = false;
-        c.viewDistance = 4;
-        Bot b = new Bot(c, null);
-        b.start();
-        for (int i = 0; i < 100 && !(World.inWorld && World.selfY != 0); i++) Thread.sleep(100);
-        Thread.sleep(1500);
+        Bot b = join();
         ProtoDef.VersionData vd = Hub.versionData;
         say("in world, version " + Hub.versionName + ", data " + (vd != null));
-
-        // ---- a test scene: house with glass, torch-lit dark room, water, chest, slabs/stairs, plants, a tree ----
-        int X = 0, Y = -60, Z = 0;
-        cmd("time set 6000");
-        cmd("weather clear");
-        cmd("fill -6 -60 -6 22 -50 22 minecraft:air");
-        cmd("fill -6 -61 -6 22 -61 22 minecraft:grass_block");
-        cmd("fill 2 -60 2 8 -56 8 minecraft:oak_planks hollow");
-        cmd("fill 2 -60 5 2 -59 5 minecraft:air");
-        cmd("setblock 2 -60 5 minecraft:oak_door[facing=west,half=lower]");
-        cmd("setblock 2 -59 5 minecraft:oak_door[facing=west,half=upper]");
-        cmd("fill 5 -58 2 6 -58 2 minecraft:glass");
-        cmd("fill 2 -56 2 8 -56 8 minecraft:oak_slab[type=bottom]");
-        cmd("fill 12 -60 2 16 -57 6 minecraft:stone hollow");
-        cmd("setblock 14 -59 4 minecraft:torch");
-        cmd("setblock 13 -59 3 minecraft:wall_torch[facing=east]");
-        cmd("fill -4 -61 10 0 -61 14 minecraft:water");
-        cmd("setblock 4 -60 12 minecraft:chest[facing=south]");
-        cmd("setblock 6 -60 12 minecraft:copper_chest[facing=south]");
-        cmd("fill 8 -60 12 10 -60 12 minecraft:stone_brick_stairs[facing=west]");
-        cmd("fill 8 -60 13 10 -60 13 minecraft:smooth_stone_slab");
-        cmd("fill -2 -60 4 0 -60 6 minecraft:short_grass");
-        cmd("setblock -1 -60 7 minecraft:poppy");
-        cmd("setblock 0 -60 7 minecraft:dandelion");
-        cmd("place feature minecraft:oak 18 -60 14");
-        cmd("fill 10 -60 8 10 -58 8 minecraft:oak_fence");
-        cmd("setblock 11 -60 9 minecraft:lantern");
-        cmd("fill 10 -60 8 10 -60 10 minecraft:oak_fence");
-        cmd("fill 9 -60 10 9 -60 10 minecraft:oak_fence");
-        cmd("fill 0 -60 9 0 -58 11 minecraft:glass_pane");
-        cmd("fill -3 -60 1 -3 -60 6 minecraft:rail");
-        cmd("fill 12 -61 9 15 -61 11 minecraft:farmland");
-        cmd("fill 12 -60 9 15 -60 11 minecraft:wheat[age=7]");
-        cmd("setblock 1 -60 3 minecraft:ladder[facing=west]");
-        cmd("setblock 1 -59 3 minecraft:ladder[facing=west]");
-        cmd("setblock 3 -60 0 minecraft:potted_red_tulip");
-        cmd("setblock 7 -60 0 minecraft:wall_torch[facing=north]");
-        cmd("tp Tester 5 -60 -4 0 10");
-        Thread.sleep(4000);
-
+        scene();
         // ---- textures (cached after the first download) ----
         Map<String, byte[]> files = Textures.files(Hub.versionName);
         long ta = System.nanoTime();
@@ -151,6 +93,73 @@ public class PreviewTest {
         b.stop();
         Thread.sleep(300);
         System.exit(0);
+    }
+
+    /** Joins the local test server as "Tester" with light data on (like the Play screen does). */
+    static Bot join() throws Exception {
+        Hub.versionLoader = new Hub.VersionLoader() {
+            public ProtoDef.VersionData load(int p) throws Exception {
+                return ProtoDef.load(new java.io.FileInputStream("app/src/main/assets/proto/" + p + ".json"));
+            }
+        };
+        MapData.keepLight = true;
+        GameState.open = true;
+        Bot.Config c = new Bot.Config();
+        c.address = "127.0.0.1:25601";
+        c.offline = true;
+        c.offlineName = "Tester";
+        c.antiAfk = false;
+        c.autoReconnect = false;
+        c.autoLog = false;
+        c.visualRange = false;
+        c.viewDistance = 4;
+        Bot b = new Bot(c, null);
+        b.start();
+        for (int i = 0; i < 100 && !(World.inWorld && World.selfY != 0); i++) Thread.sleep(100);
+        Thread.sleep(1500);
+        return b;
+    }
+
+    /** Builds the test scene around (0, -60, 0) and puts the player in front of the house. */
+    static void scene() throws Exception {
+        // ---- a test scene: house with glass, torch-lit dark room, water, chest, slabs/stairs, plants, a tree ----
+        cmd("time set 6000");
+        cmd("weather clear");
+        cmd("fill -6 -60 -6 22 -50 22 minecraft:air");
+        cmd("fill -6 -61 -6 22 -61 22 minecraft:grass_block");
+        cmd("fill 2 -60 2 8 -56 8 minecraft:oak_planks hollow");
+        cmd("fill 2 -60 5 2 -59 5 minecraft:air");
+        cmd("setblock 2 -60 5 minecraft:oak_door[facing=west,half=lower]");
+        cmd("setblock 2 -59 5 minecraft:oak_door[facing=west,half=upper]");
+        cmd("fill 5 -58 2 6 -58 2 minecraft:glass");
+        cmd("fill 2 -56 2 8 -56 8 minecraft:oak_slab[type=bottom]");
+        cmd("fill 12 -60 2 16 -57 6 minecraft:stone hollow");
+        cmd("setblock 14 -59 4 minecraft:torch");
+        cmd("setblock 13 -59 3 minecraft:wall_torch[facing=east]");
+        cmd("fill -4 -61 10 0 -61 14 minecraft:water");
+        cmd("setblock 4 -60 12 minecraft:chest[facing=south]");
+        cmd("setblock 6 -60 12 minecraft:copper_chest[facing=south]");
+        cmd("fill 8 -60 12 10 -60 12 minecraft:stone_brick_stairs[facing=west]");
+        cmd("fill 8 -60 13 10 -60 13 minecraft:smooth_stone_slab");
+        cmd("fill -2 -60 4 0 -60 6 minecraft:short_grass");
+        cmd("setblock -1 -60 7 minecraft:poppy");
+        cmd("setblock 0 -60 7 minecraft:dandelion");
+        cmd("place feature minecraft:oak 18 -60 14");
+        cmd("fill 10 -60 8 10 -58 8 minecraft:oak_fence");
+        cmd("setblock 11 -60 9 minecraft:lantern");
+        cmd("fill 10 -60 8 10 -60 10 minecraft:oak_fence");
+        cmd("fill 9 -60 10 9 -60 10 minecraft:oak_fence");
+        cmd("fill 0 -60 9 0 -58 11 minecraft:glass_pane");
+        cmd("fill -3 -60 1 -3 -60 6 minecraft:rail");
+        cmd("fill 12 -61 9 15 -61 11 minecraft:farmland");
+        cmd("fill 12 -60 9 15 -60 11 minecraft:wheat[age=7]");
+        cmd("setblock 1 -60 3 minecraft:ladder[facing=west]");
+        cmd("setblock 1 -59 3 minecraft:ladder[facing=west]");
+        cmd("setblock 3 -60 0 minecraft:potted_red_tulip");
+        cmd("setblock 7 -60 0 minecraft:wall_torch[facing=north]");
+        cmd("tp Tester 5 -60 -4 0 10");
+        Thread.sleep(4000);
+
     }
 
     /** Minimal perspective-correct, z-buffered rasterizer for GameMesher output (same lighting as the shader). */
