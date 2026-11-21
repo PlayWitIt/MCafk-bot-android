@@ -6,5 +6,6 @@ public class Context {
   public Context getApplicationContext() { return this; }
   private final android.content.res.Resources res = new android.content.res.Resources();
   public android.content.res.Resources getResources() { return res; }
+  public android.content.res.AssetManager getAssets() { return new android.content.res.AssetManager(); }
   public java.io.File getFilesDir() { java.io.File f = new java.io.File("desktop/state/files"); f.mkdirs(); return f; }
 }

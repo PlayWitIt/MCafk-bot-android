@@ -565,7 +565,7 @@ final class MapData {
         return motion != null ? motion : surface;
     }
 
-    private static void skipNbt(Buf.In p, int t) throws IOException {
+    static void skipNbt(Buf.In p, int t) throws IOException {
         switch (t) {
             case 1: p.bytes(1); break;
             case 2: p.bytes(2); break;

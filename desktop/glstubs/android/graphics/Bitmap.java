@@ -6,6 +6,16 @@ import java.awt.image.BufferedImage;
 public class Bitmap {
     public enum Config { ARGB_8888 }
 
+    public enum CompressFormat { PNG }
+
+    public boolean compress(CompressFormat f, int quality, java.io.OutputStream out) {
+        try {
+            return javax.imageio.ImageIO.write(img, "png", out);
+        } catch (java.io.IOException e) {
+            return false;
+        }
+    }
+
     final BufferedImage img;
 
     Bitmap(BufferedImage img) {

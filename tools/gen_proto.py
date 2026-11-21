@@ -94,6 +94,7 @@ SPEC=[
  ('P_C_EXPERIENCE','play','toClient',['experience']),
  ('P_C_GAME_STATE','play','toClient',['game_state_change']),
  ('P_C_BREAK_ANIM','play','toClient',['block_break_animation']),
+ ('P_C_ENTITY_METADATA','play','toClient',['entity_metadata']),
 ]
 
 # ---- map colours (approximate, like a vanilla map) ----
@@ -280,7 +281,23 @@ for v,p in dp.items():
             if isinstance(v,list): used.update(v)
             elif v>=0: used.add(v)
         cshapes={k:[[round(x,5) for x in bx] for bx in cshapes[str(k)]] for k in sorted(used)}
-    out_obj={'protocol':n,'packets':pk,'types':want,'items':inames,'itemIds':iids,
+    # entity metadata value type ids (they shift between versions): find the mapper that lists "item_stack"
+    meta={}
+    def _find_meta(o):
+        if isinstance(o,dict):
+            m=o.get('mappings')
+            if isinstance(m,dict) and 'item_stack' in m.values():
+                return {v:int(k) for k,v in m.items()}
+            for v in o.values():
+                r=_find_meta(v)
+                if r: return r
+        elif isinstance(o,list):
+            for v in o:
+                r=_find_meta(v)
+                if r: return r
+        return None
+    meta=_find_meta(pr) or {}
+    out_obj={'protocol':n,'packets':pk,'types':want,'items':inames,'itemIds':iids,'metaTypes':meta,
              'blockMin':[b['minStateId'] for b in blocks],'blockNames':[b['displayName'] for b in blocks],
              'shapes':[shape_code(b) for b in blocks],
              'blockIds':[b['name'] for b in blocks],

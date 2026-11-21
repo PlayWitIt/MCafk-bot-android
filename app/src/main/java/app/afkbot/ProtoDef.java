@@ -317,6 +317,7 @@ final class ProtoDef {
         final JSONObject packets;
         final String[] itemNames;
         final String[] itemIds; // internal names, null for data generated before they were added
+        final String[] metaTypes; // entity metadata value type names by id ("item_stack"...), or empty
         final int[] blockMin;
         final String[] blockNames;
         final int[] shapes; // collision/outline shape type per block (see Shapes)
@@ -336,6 +337,20 @@ final class ProtoDef {
             JSONArray n = root.getJSONArray("items");
             itemNames = new String[n.length()];
             for (int i = 0; i < n.length(); i++) itemNames[i] = n.getString(i);
+            JSONObject metaObj = root.optJSONObject("metaTypes");
+            String[] mts = new String[0];
+            if (metaObj != null) {
+                int max = -1;
+                java.util.Iterator<String> it = metaObj.keys();
+                while (it.hasNext()) max = Math.max(max, metaObj.getInt(it.next()));
+                mts = new String[max + 1];
+                it = metaObj.keys();
+                while (it.hasNext()) {
+                    String k = it.next();
+                    mts[metaObj.getInt(k)] = k;
+                }
+            }
+            metaTypes = mts;
             JSONArray iid = root.optJSONArray("itemIds");
             if (iid != null) {
                 itemIds = new String[iid.length()];

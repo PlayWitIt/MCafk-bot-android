@@ -19,6 +19,7 @@ final class World {
         final UUID uuid;
         double x, y, z;
         float yaw; // facing, from the direction it last moved
+        volatile String item; // dropped items: which item (from its metadata, Play screen only)
 
         Ent(int id, char kind, String type, UUID uuid, double x, double y, double z) {
             this.id = id;
@@ -35,6 +36,7 @@ final class World {
     static final class Dot {
         int id = -1;
         String type = "";
+        String item; // dropped items: the item id, if known
         float yaw;
         final char kind;
         final String label;
@@ -74,8 +76,38 @@ final class World {
     }
 
     static synchronized void add(Ent e) {
-        if (ENTS.size() >= MAX_ENTITIES && !ENTS.containsKey(e.id)) return;
+        if (ENTS.size() >= MAX_ENTITIES && !ENTS.containsKey(e.id)) {
+            // full: make room by dropping the farthest less important entity (items first, players never), so a
+            // pile of dropped items can't hide an approaching player or mob
+            Ent worst = null;
+            double worstScore = rank(e) * 1e9 + dist2(e);
+            for (Ent o : ENTS.values()) {
+                double sc = rank(o) * 1e9 + dist2(o);
+                if (sc > worstScore) {
+                    worst = o;
+                    worstScore = sc;
+                }
+            }
+            if (worst == null) return; // everything kept is more important than this one
+            ENTS.remove(worst.id);
+        }
         ENTS.put(e.id, e);
+    }
+
+    /** Lower is more important: players, then hostile mobs, animals, other, dropped items. */
+    private static int rank(Ent e) {
+        switch (e.kind) {
+            case 'p': return 0;
+            case 'h': return 1;
+            case 'a': return 2;
+            case 'i': return 4;
+            default: return 3;
+        }
+    }
+
+    private static double dist2(Ent e) {
+        double dx = e.x - selfX, dy = e.y - selfY, dz = e.z - selfZ;
+        return Math.min(dx * dx + dy * dy + dz * dz, 9e8);
     }
 
     static synchronized Ent remove(int id) {
@@ -147,6 +179,7 @@ final class World {
                 d.id = e.id;
                 d.type = e.kind == 'p' ? "player" : e.type;
                 d.yaw = e.yaw;
+                d.item = e.item;
                 out.add(d);
             }
         }

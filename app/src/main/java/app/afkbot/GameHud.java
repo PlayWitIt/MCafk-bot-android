@@ -169,6 +169,7 @@ final class GameHud extends View {
         float hotTop = drawHotbar(c, w, h);
         if (survival) hotTop = drawStatus(c, w, hotTop);
         drawChat(c, hotTop);
+        drawNameTags(c);
         if (!menu) {
             drawTargetName(c, w);
             if (showCoords) drawDebug(c);
@@ -286,6 +287,18 @@ final class GameHud extends View {
             c.drawRect(0, y - s, maxW + 4 * s, y + lh - s, ui);
             text(c, msg, 2 * s, y, Color.argb((int) (255 * alpha), 255, 255, 255), true, s);
             y -= lh;
+        }
+    }
+
+    /** Player names above their heads, like the game: white text on a dark translucent strip. */
+    private void drawNameTags(Canvas c) {
+        float s = Math.max(1, gui * 0.6f);
+        for (Object[] l : r.labels) {
+            String name = (String) l[2];
+            float x = (Float) l[0], y = (Float) l[1], tw = textWidth(name, s);
+            ui.setColor(0x40000000);
+            c.drawRect(x - tw / 2 - s, y - s, x + tw / 2 + s, y + 8 * s, ui);
+            text(c, name, x - tw / 2, y, 0xFFFFFFFF, false, s);
         }
     }
 

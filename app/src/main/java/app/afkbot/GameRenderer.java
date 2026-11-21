@@ -180,6 +180,7 @@ final class GameRenderer implements GLSurfaceView.Renderer, MapData.Changes {
         lMvp = GLES20.glGetUniformLocation(lineProg, "uMvp");
         lOff = GLES20.glGetUniformLocation(lineProg, "uOff");
         lColor = GLES20.glGetUniformLocation(lineProg, "uColor");
+        initEntities();
         // one index buffer for all quads: 0 1 2 0 2 3, 4 5 6 4 6 7, ... (16384 quads = 65536 vertices)
         ShortBuffer ib = ByteBuffer.allocateDirect(16384 * 6 * 2).order(ByteOrder.nativeOrder()).asShortBuffer();
         for (int q = 0; q < 16384; q++) {
@@ -289,7 +290,7 @@ final class GameRenderer implements GLSurfaceView.Renderer, MapData.Changes {
         GLES20.glDisableVertexAttribArray(aLight);
 
         pickTarget(fx, fy, fz);
-        drawEntities();
+        drawEntities(day, sr, sg, sb, far);
         drawCracks(a);
         drawOutline();
     }
@@ -561,20 +562,250 @@ final class GameRenderer implements GLSurfaceView.Renderer, MapData.Changes {
         GLES20.glDisable(GLES20.GL_BLEND);
     }
 
-    /** Other players and mobs: shaded boxes (players 0.6 x 1.8, animals wider). */
-    private void drawEntities() {
+    // ---- entities: Mojang's own models (EntityModels), lit by the light where they stand ----
+
+    private static final String EVS =
+            "attribute vec3 aPos; attribute vec2 aUv; attribute float aShade;\n" +
+            "uniform mat4 uMvp; uniform vec3 uPos; uniform vec2 uRot; uniform vec2 uFogRange;\n" +
+            "varying vec2 vUv; varying float vShade; varying float vFog;\n" +
+            "void main() {\n" +
+            "  vec3 p = vec3(aPos.x * uRot.x - aPos.z * uRot.y, aPos.y, aPos.x * uRot.y + aPos.z * uRot.x) + uPos;\n" +
+            "  gl_Position = uMvp * vec4(p, 1.0);\n" +
+            "  vUv = aUv; vShade = aShade;\n" +
+            "  vFog = clamp((length(p) - uFogRange.x) / (uFogRange.y - uFogRange.x), 0.0, 1.0);\n" +
+            "}";
+    private static final String EFS =
+            "precision mediump float;\n" +
+            "uniform sampler2D uTex; uniform vec3 uLight; uniform vec3 uFog; uniform vec4 uTint;\n" +
+            "varying vec2 vUv; varying float vShade; varying float vFog;\n" +
+            "void main() {\n" +
+            "  vec4 t = texture2D(uTex, vUv);\n" +
+            "  if (t.a < 0.1) discard;\n" +
+            "  vec3 c = mix(t.rgb, uTint.rgb, uTint.a) * vShade * uLight;\n" +
+            "  gl_FragColor = vec4(mix(c, uFog, vFog), 1.0);\n" +
+            "}";
+    private int eProg, eaPos, eaUv, eaShade, euMvp, euPos, euRot, euFogRange, euTex, euLight, euFog, euTint;
+    private final Map<EntityModels.Model, int[]> modelGl = new java.util.HashMap<EntityModels.Model, int[]>(); // {vbo, tex, vertices}
+    /** Name tags for the HUD: {screen x, screen y, text}, updated every frame. */
+    volatile List<Object[]> labels = new ArrayList<Object[]>();
+    private final float[] lc = new float[3];
+
+    private void initEntities() {
+        eProg = program(EVS, EFS);
+        eaPos = GLES20.glGetAttribLocation(eProg, "aPos");
+        eaUv = GLES20.glGetAttribLocation(eProg, "aUv");
+        eaShade = GLES20.glGetAttribLocation(eProg, "aShade");
+        euMvp = GLES20.glGetUniformLocation(eProg, "uMvp");
+        euPos = GLES20.glGetUniformLocation(eProg, "uPos");
+        euRot = GLES20.glGetUniformLocation(eProg, "uRot");
+        euFogRange = GLES20.glGetUniformLocation(eProg, "uFogRange");
+        euTex = GLES20.glGetUniformLocation(eProg, "uTex");
+        euLight = GLES20.glGetUniformLocation(eProg, "uLight");
+        euFog = GLES20.glGetUniformLocation(eProg, "uFog");
+        euTint = GLES20.glGetUniformLocation(eProg, "uTint");
+        modelGl.clear();
+    }
+
+    private int[] modelGl(EntityModels.Model m) {
+        int[] g = modelGl.get(m);
+        if (g != null) return g;
+        int[] ids = new int[1];
+        GLES20.glGenBuffers(1, ids, 0);
+        FloatBuffer fb = ByteBuffer.allocateDirect(m.mesh.length * 4).order(ByteOrder.nativeOrder()).asFloatBuffer();
+        fb.put(m.mesh).position(0);
+        GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, ids[0]);
+        GLES20.glBufferData(GLES20.GL_ARRAY_BUFFER, m.mesh.length * 4, fb, GLES20.GL_STATIC_DRAW);
+        int vbo = ids[0];
+        int w = m.texture.getWidth(), h = m.texture.getHeight();
+        ByteBuffer rgba = ByteBuffer.allocateDirect(w * h * 4).order(ByteOrder.nativeOrder());
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                int p = m.texture.getPixel(x, y);
+                rgba.put((byte) (p >> 16)).put((byte) (p >> 8)).put((byte) p).put((byte) (p >>> 24));
+            }
+        rgba.position(0);
+        GLES20.glGenTextures(1, ids, 0);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, ids[0]);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_NEAREST);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_NEAREST);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
+        GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, w, h, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, rgba);
+        g = new int[]{vbo, ids[0], m.mesh.length / Geo.STRIDE};
+        modelGl.put(m, g);
+        return g;
+    }
+
+    /** Players and mobs with their real models (boxes while a model downloads), plus name tag positions. */
+    private void drawEntities(float day, float sr, float sg, float sb, float far) {
         List<World.Dot> dots = World.snapshot(null);
-        if (dots.isEmpty()) return;
+        List<Object[]> tags = new ArrayList<Object[]>();
+        double px = World.selfX, py = World.selfY, pz = World.selfZ;
+        int n = 0;
+        GLES20.glUseProgram(eProg);
+        GLES20.glUniformMatrix4fv(euMvp, 1, false, mvp, 0);
+        GLES20.glUniform2f(euFogRange, far * 0.72f, far);
+        GLES20.glUniform3f(euFog, sr, sg, sb);
+        GLES20.glUniform1i(euTex, 0);
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+        GLES20.glEnableVertexAttribArray(eaPos);
+        GLES20.glEnableVertexAttribArray(eaUv);
+        GLES20.glEnableVertexAttribArray(eaShade);
+        GLES20.glDisable(GLES20.GL_CULL_FACE); // some model parts are single planes
+        List<World.Dot> boxes = new ArrayList<World.Dot>();
+        for (World.Dot d : dots) {
+            if (d.dist > renderDistance * 16 || d.kind == 'i') {
+                if (d.kind == 'i' && d.dist <= renderDistance * 16) boxes.add(d);
+                continue;
+            }
+            float x = (float) (px + d.dx - camX), y = (float) (py + d.dy - camY), z = (float) (pz + d.dz - camZ);
+            if (d.kind == 'p') {
+                float[] sp = project(x, y + 2.15f, z);
+                if (sp != null) tags.add(new Object[]{sp[0], sp[1], d.label});
+            }
+            EntityModels.Model m = ++n <= 120 ? EntityModels.get(d.type) : null;
+            if (m == null || m.texture == null) {
+                boxes.add(d);
+                continue;
+            }
+            int[] g = modelGl(m);
+            int l = MapData.lightAt((int) Math.floor(px + d.dx), (int) Math.floor(py + d.dy + 0.5), (int) Math.floor(pz + d.dz));
+            if (l < 0) l = 0xF0;
+            GameLight.color(l >> 4, l & 15, day, lc);
+            GLES20.glUniform3f(euLight, lc[0], lc[1], lc[2]);
+            GLES20.glUniform4f(euTint, 1f, 1f, 1f, d == targetEntity ? 0.18f : 0f);
+            double a = Math.toRadians(d.yaw + 180);
+            GLES20.glUniform2f(euRot, (float) Math.cos(a), (float) Math.sin(a));
+            GLES20.glUniform3f(euPos, x, y, z);
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, g[1]);
+            GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, g[0]);
+            GLES20.glVertexAttribPointer(eaPos, 3, GLES20.GL_FLOAT, false, Geo.STRIDE * 4, 0);
+            GLES20.glVertexAttribPointer(eaUv, 2, GLES20.GL_FLOAT, false, Geo.STRIDE * 4, 12);
+            GLES20.glVertexAttribPointer(eaShade, 1, GLES20.GL_FLOAT, false, Geo.STRIDE * 4, 20);
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, g[2]);
+        }
+        GLES20.glDisableVertexAttribArray(eaPos);
+        GLES20.glDisableVertexAttribArray(eaUv);
+        GLES20.glDisableVertexAttribArray(eaShade);
+        GLES20.glEnable(GLES20.GL_CULL_FACE);
+        labels = tags;
+        List<World.Dot> items = new ArrayList<World.Dot>(), others = new ArrayList<World.Dot>();
+        for (World.Dot d : boxes) (d.kind == 'i' ? items : others).add(d);
+        if (!items.isEmpty()) others.addAll(drawItems(items));
+        if (!others.isEmpty()) drawBoxes(others, day);
+    }
+
+    private GameIcons icons;
+    private GameAssetStore.Loaded iconsFor;
+
+    /**
+     * Dropped items as the game shows them: the item itself, spinning and bobbing (flat items as a double-sided
+     * sprite, blocks as a small cube). Returns the ones that couldn't be drawn (item not known yet).
+     */
+    private List<World.Dot> drawItems(List<World.Dot> items) {
+        GameAssetStore.Loaded a = assets;
+        List<World.Dot> rest = new ArrayList<World.Dot>();
+        if (a == null) return items;
+        if (iconsFor != a) {
+            icons = new GameIcons(a.files, a.atlas);
+            iconsFor = a;
+        }
+        GLES20.glUseProgram(prog);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texId);
+        GLES20.glUniform1f(uAlphaRef, 0.5f);
+        GLES20.glDisable(GLES20.GL_CULL_FACE);
+        GLES20.glEnableVertexAttribArray(aPos);
+        GLES20.glEnableVertexAttribArray(aUv);
+        GLES20.glEnableVertexAttribArray(aCol);
+        GLES20.glEnableVertexAttribArray(aLight);
+        GLES20.glBindBuffer(GLES20.GL_ELEMENT_ARRAY_BUFFER, indexBuf);
+        double px = World.selfX, py = World.selfY, pz = World.selfZ;
+        long now = System.currentTimeMillis();
+        for (World.Dot d : items) {
+            GameIcons.Icon ic = d.item == null ? null : icons.get(d.item);
+            if (ic == null || ic.empty()) {
+                rest.add(d);
+                continue;
+            }
+            int l = MapData.lightAt((int) Math.floor(px + d.dx), (int) Math.floor(py + d.dy + 0.25), (int) Math.floor(pz + d.dz));
+            if (l < 0) l = 0xF0;
+            double spin = (now / 1000.0 + d.id * 0.37) % (Math.PI * 2);
+            float bob = (float) (0.1 + 0.05 * Math.sin(now / 500.0 + d.id));
+            ByteBuffer bb = ByteBuffer.allocateDirect(8 * 4 * GameMesher.BYTES).order(ByteOrder.nativeOrder());
+            int quads;
+            if (ic.flat()) {
+                quads = 0;
+                for (int[] layer : ic.layers) { // a 0.5-block sprite, standing up
+                    float h = 0.5f, w = h * layer[2] / Math.max(1, layer[3]);
+                    float[][] c = {{-w / 2, 0, 0}, {w / 2, 0, 0}, {w / 2, h, 0}, {-w / 2, h, 0}};
+                    float[][] uv = {{layer[0], layer[1] + layer[3]}, {layer[0] + layer[2], layer[1] + layer[3]}, {layer[0] + layer[2], layer[1]}, {layer[0], layer[1]}};
+                    int tint = layer[4] != 0 ? layer[4] : 0xFFFFFF;
+                    quad(bb, c, uv, spin, tint, l, 1f);
+                    quads++;
+                }
+            } else { // a quarter-size cube
+                float e = 0.125f;
+                int[][] rects = {ic.top, ic.top, ic.front, ic.side, ic.side, ic.side};
+                float[] shade = {1f, 0.5f, 0.8f, 0.8f, 0.6f, 0.6f};
+                for (int f = 0; f < 6; f++) {
+                    float[][] c = GameMesher.cornersOf(f, new float[]{-e, 0, -e, e, 2 * e, e});
+                    int[] r = rects[f];
+                    float[][] uv = {{r[0], r[1] + r[3]}, {r[0] + r[2], r[1] + r[3]}, {r[0] + r[2], r[1]}, {r[0], r[1]}};
+                    int t = (f == 0 || ic.tintSides) && ic.tint != 0 ? ic.tint : 0xFFFFFF;
+                    quad(bb, c, uv, spin, t, l, shade[f]);
+                }
+                quads = 6;
+            }
+            bb.position(0);
+            GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
+            GLES20.glUniform3f(uOff, (float) (px + d.dx - camX), (float) (py + d.dy - camY) + bob, (float) (pz + d.dz - camZ));
+            bb.position(0);
+            GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_SHORT, false, GameMesher.BYTES, bb);
+            bb.position(6);
+            GLES20.glVertexAttribPointer(aUv, 2, GLES20.GL_UNSIGNED_SHORT, true, GameMesher.BYTES, bb);
+            bb.position(10);
+            GLES20.glVertexAttribPointer(aCol, 4, GLES20.GL_UNSIGNED_BYTE, true, GameMesher.BYTES, bb);
+            bb.position(14);
+            GLES20.glVertexAttribPointer(aLight, 2, GLES20.GL_UNSIGNED_BYTE, true, GameMesher.BYTES, bb);
+            GLES20.glDrawElements(GLES20.GL_TRIANGLES, quads * 6, GLES20.GL_UNSIGNED_SHORT, 0);
+        }
+        GLES20.glDisableVertexAttribArray(aPos);
+        GLES20.glDisableVertexAttribArray(aUv);
+        GLES20.glDisableVertexAttribArray(aCol);
+        GLES20.glDisableVertexAttribArray(aLight);
+        GLES20.glEnable(GLES20.GL_CULL_FACE);
+        return rest;
+    }
+
+    /** One quad (corners around the item's centre, uvs in atlas pixels) turned by the spin angle, in the block format. */
+    private static void quad(ByteBuffer bb, float[][] c, float[][] uvPx, double spin, int tint, int light, float shade) {
+        double cos = Math.cos(spin), sin = Math.sin(spin);
+        int r = (int) (((tint >> 16) & 255) * shade), g = (int) (((tint >> 8) & 255) * shade), b = (int) ((tint & 255) * shade);
+        for (int k = 0; k < 4; k++) {
+            double x = c[k][0] * cos - c[k][2] * sin, z = c[k][0] * sin + c[k][2] * cos;
+            bb.putShort((short) Math.round(x * GameMesher.POS)).putShort((short) Math.round(c[k][1] * GameMesher.POS)).putShort((short) Math.round(z * GameMesher.POS));
+            bb.putShort((short) Math.round(uvPx[k][0] / GameAtlas.SIZE * 65535)).putShort((short) Math.round(uvPx[k][1] / GameAtlas.SIZE * 65535));
+            bb.put((byte) r).put((byte) g).put((byte) b).put((byte) 255).put((byte) ((light >> 4) * 17)).put((byte) ((light & 15) * 17));
+        }
+    }
+
+    /** Entities without a model yet (and items not known yet): shaded boxes. */
+    private void drawBoxes(List<World.Dot> dots, float day) {
         GLES20.glUseProgram(lineProg);
         GLES20.glUniformMatrix4fv(lMvp, 1, false, mvp, 0);
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
         GLES20.glEnableVertexAttribArray(lPos);
         double px = World.selfX, py = World.selfY, pz = World.selfZ;
+        long now = System.currentTimeMillis();
         for (World.Dot d : dots) {
-            if (d.dist > renderDistance * 16) continue;
-            float w = d.kind == 'a' ? 0.9f : d.kind == 'i' ? 0.25f : 0.6f, h = d.kind == 'a' ? 1.0f : d.kind == 'i' ? 0.25f : 1.8f;
-            int col = d.kind == 'p' ? (d.friend ? 0x60A5FA : 0xF8FAFC) : d.kind == 'h' ? 0xEF4444 : d.kind == 'a' ? 0x84CC16 : d.kind == 'i' ? 0xFACC15 : 0xA78BFA;
-            GLES20.glUniform3f(lOff, (float) (px + d.dx - camX), (float) (py + d.dy - camY), (float) (pz + d.dz - camZ));
+            boolean item = d.kind == 'i';
+            float w = d.kind == 'a' ? 0.9f : item ? 0.25f : 0.6f, h = d.kind == 'a' ? 1.0f : item ? 0.25f : 1.8f;
+            int col = d.kind == 'p' ? (d.friend ? 0x60A5FA : 0xF8FAFC) : d.kind == 'h' ? 0xEF4444 : d.kind == 'a' ? 0x84CC16 : item ? 0xFACC15 : 0xA78BFA;
+            float bob = item ? (float) (0.1 + 0.08 * Math.sin(now / 400.0 + d.id)) : 0; // dropped items float and bob
+            GLES20.glUniform3f(lOff, (float) (px + d.dx - camX), (float) (py + d.dy - camY) + bob, (float) (pz + d.dz - camZ));
+            int l = MapData.lightAt((int) Math.floor(px + d.dx), (int) Math.floor(py + d.dy + 0.5), (int) Math.floor(pz + d.dz));
+            if (l < 0) l = 0xF0;
+            GameLight.color(l >> 4, l & 15, day, lc);
             float[] shade = {1f, 0.5f, 0.8f, 0.8f, 0.6f, 0.6f};
             for (int f = 0; f < 6; f++) {
                 float[][] c = GameMesher.cornersOf(f, new float[]{-w / 2, 0, -w / 2, w / 2, h, w / 2});
@@ -582,12 +813,22 @@ final class GameRenderer implements GLSurfaceView.Renderer, MapData.Changes {
                 for (int k : new int[]{0, 1, 2, 0, 2, 3}) lineBuf.put(c[k]);
                 lineBuf.position(0);
                 float s = shade[f] * (d == targetEntity ? 1f : 0.85f);
-                GLES20.glUniform4f(lColor, ((col >> 16) & 255) / 255f * s, ((col >> 8) & 255) / 255f * s, (col & 255) / 255f * s, 1f);
+                GLES20.glUniform4f(lColor, ((col >> 16) & 255) / 255f * s * lc[0], ((col >> 8) & 255) / 255f * s * lc[1], (col & 255) / 255f * s * lc[2], 1f);
                 GLES20.glVertexAttribPointer(lPos, 3, GLES20.GL_FLOAT, false, 12, lineBuf);
                 GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, 6);
             }
         }
         GLES20.glDisableVertexAttribArray(lPos);
+    }
+
+    /** Screen position of a camera-relative point, or null if behind or far off screen. */
+    private float[] project(float x, float y, float z) {
+        float[] in = {x, y, z, 1}, out = new float[4];
+        Matrix.multiplyMV(out, 0, mvp, 0, in, 0);
+        if (out[3] <= 0.05f) return null;
+        float nx = out[0] / out[3], ny = out[1] / out[3];
+        if (nx < -1.2f || nx > 1.2f || ny < -1.2f || ny > 1.2f) return null;
+        return new float[]{(nx + 1) / 2 * vw, (1 - ny) / 2 * vh};
     }
 
     /** Crack texture over blocks being broken (ours and other players'), multiplied onto the block like vanilla. */

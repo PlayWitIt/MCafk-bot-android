@@ -885,6 +885,52 @@ final class Bot {
         return type >= 0 && type < typeNames.length ? typeNames[type] : "";
     }
 
+    /**
+     * Entity metadata, read only far enough to learn which item a dropped item entity is (entry 8, the item stack)
+     * so the Play screen can draw it. Entries before it use simple types; anything else stops the parse.
+     */
+    private void readItemMetadata(Buf.In p) throws IOException {
+        int eid = p.varInt();
+        World.Ent e = World.get(eid);
+        if (e == null || e.kind != 'i' || vdata == null || vdata.metaTypes.length == 0) return;
+        String slotType = proto >= 766 ? "Slot" : "slot";
+        for (int guard = 0; guard < 32; guard++) {
+            int key = p.u8();
+            if (key == 0xFF) return;
+            int t = p.varInt();
+            String type = t >= 0 && t < vdata.metaTypes.length ? vdata.metaTypes[t] : null;
+            if (type == null) return;
+            switch (type) {
+                case "byte": p.u8(); break;
+                case "boolean": p.u8(); break;
+                case "int": case "pose": case "direction": case "block_state": case "optional_block_state": p.varInt(); break;
+                case "long": readVarLong(p); break;
+                case "float": p.f32(); break;
+                case "string": p.str(); break;
+                case "component":
+                    if (proto >= 765) skipAnonNbt(p); else p.str();
+                    break;
+                case "optional_component":
+                    if (p.bool()) {
+                        if (proto >= 765) skipAnonNbt(p); else p.str();
+                    }
+                    break;
+                case "item_stack": {
+                    Inv.Item it = Inv.fromSlot(vdata.def.read(slotType, p), vdata);
+                    if (it != null) e.item = vdata.itemId(it.id);
+                    return;
+                }
+                default:
+                    return; // a type we don't need to understand; the item stack would have come first
+            }
+        }
+    }
+
+    private static void skipAnonNbt(Buf.In p) throws IOException {
+        int t = p.u8();
+        if (t != 0) MapData.skipNbt(p, t);
+    }
+
     private boolean handleEntity(int pid, Buf.In p) throws IOException {
         if (pid == id(Proto.P_C_SPAWN_ENTITY) || pid == id(Proto.P_C_SPAWN_PLAYER) || pid == id(Proto.P_C_SPAWN_LIVING)) {
             int eid = p.varInt();
@@ -896,6 +942,8 @@ final class Bot {
             World.Ent e = new World.Ent(eid, kind, kind == 'p' ? "player" : nameOf(type), u, p.f64(), p.f64(), p.f64());
             World.add(e);
             if (kind == 'p') onPlayerSeen(e);
+        } else if (pid == id(Proto.P_C_ENTITY_METADATA)) {
+            if (GameState.open) readItemMetadata(p);
         } else if (pid == id(Proto.P_C_ENTITY_DESTROY)) {
             int n = p.varInt();
             for (int i = 0; i < n; i++) {
@@ -2492,7 +2540,7 @@ final class Bot {
         if (MapData.supported && (pid == id(Proto.P_C_MAP_CHUNK) || pid == id(Proto.P_C_UNLOAD_CHUNK))) return true;
         // only decoded while the Play screen is open (keeps the AFK bot as light as before)
         if (GameState.open && (pid == id(Proto.P_C_UPDATE_LIGHT) || pid == id(Proto.P_C_UPDATE_TIME) || pid == id(Proto.P_C_EXPERIENCE)
-                || pid == id(Proto.P_C_GAME_STATE) || pid == id(Proto.P_C_BREAK_ANIM))) return true;
+                || pid == id(Proto.P_C_GAME_STATE) || pid == id(Proto.P_C_BREAK_ANIM) || pid == id(Proto.P_C_ENTITY_METADATA))) return true;
         if (pid == id(Proto.P_C_BLOCK_CHANGE) || pid == id(Proto.P_C_MULTI_BLOCK) || pid == id(Proto.P_C_WINDOW_ITEMS)
                 || pid == id(Proto.P_C_SET_SLOT) || pid == id(Proto.P_C_OPEN_WINDOW) || pid == id(Proto.P_C_CLOSE_WINDOW)
                 || pid == id(Proto.P_C_HELD_SLOT)) return true;

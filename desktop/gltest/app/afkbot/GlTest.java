@@ -29,6 +29,14 @@ public class GlTest {
         // something to show in the hotbar, and a few hearts missing
         for (String g : new String[]{"diamond_sword", "oak_planks 64", "torch 32", "grass_block 12", "apple 5", "oak_log 20", "glass 16", "bow", "furnace"})
             PreviewTest.cmd("give Tester minecraft:" + g);
+        PreviewTest.cmd("gamerule doMobSpawning false");
+        PreviewTest.cmd("kill @e[type=slime]");
+        PreviewTest.cmd("effect give Tester minecraft:resistance infinite 255 true");
+        PreviewTest.cmd("difficulty easy");
+        String[] mobs = {"zombie", "skeleton", "creeper", "cow", "pig", "sheep", "chicken", "villager", "iron_golem", "spider"};
+        for (int i = 0; i < mobs.length; i++)
+            PreviewTest.cmd("summon minecraft:" + mobs[i] + " " + (-4 + i * 1.6) + " -60 -9 {NoAI:1b,Rotation:[0f,0f],PersistenceRequired:1b}");
+        EntityModels.init(new android.content.Context());
         PreviewTest.cmd("damage Tester 7");
         PreviewTest.cmd("xp set Tester 12 levels");
         Thread.sleep(1200);
@@ -63,6 +71,10 @@ public class GlTest {
         PreviewTest.cmd("tp Tester 10.5 -59.5 12.5 135 28");
         Thread.sleep(1500);
         shot(r, b, out + "/gl_close.png", 135, 28, 6000);
+        PreviewTest.cmd("tp Tester 3 -60 -16 0 15");
+        Thread.sleep(1500);
+        for (World.Dot d : World.snapshot(null)) System.out.println(String.format("[GL] entity %s kind %c type %s at %.1f %.1f %.1f yaw %.0f", d.label, d.kind, d.type, d.dx, d.dy, d.dz, d.yaw));
+        for (int i = 0; i < 3; i++) { shot(r, b, out + "/gl_mobs.png", 0, 8, 6000); } // models download on first sight
         PreviewTest.cmd("tp Tester 14.5 -59 5.4 180 25");
         Thread.sleep(1500);
         shot(r, b, out + "/gl_torch_room.png", 180, 25, 6000);

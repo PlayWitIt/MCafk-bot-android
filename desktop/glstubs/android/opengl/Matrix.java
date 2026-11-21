@@ -13,6 +13,12 @@ public class Matrix {
         System.arraycopy(t, 0, r, ro, 16);
     }
 
+    public static void multiplyMV(float[] r, int ro, float[] m, int mo, float[] v, int vo) {
+        float[] t = new float[4];
+        for (int i = 0; i < 4; i++) t[i] = m[mo + i] * v[vo] + m[mo + 4 + i] * v[vo + 1] + m[mo + 8 + i] * v[vo + 2] + m[mo + 12 + i] * v[vo + 3];
+        System.arraycopy(t, 0, r, ro, 4);
+    }
+
     public static void perspectiveM(float[] m, int o, float fovy, float aspect, float zNear, float zFar) {
         float f = 1.0f / (float) Math.tan(fovy * (Math.PI / 360.0));
         float rr = 1.0f / (zNear - zFar);
