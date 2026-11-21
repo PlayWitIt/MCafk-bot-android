@@ -19,7 +19,9 @@ final class World {
         final UUID uuid;
         double x, y, z;
         float yaw; // facing, from the direction it last moved
-        volatile String item; // dropped items: which item (from its metadata, Play screen only)
+        volatile String item; // dropped items: which item (from its metadata, Play screen or a mod that wants it)
+        volatile int itemCount; // dropped items: how many
+        final long born = System.currentTimeMillis(); // when we first saw it (a dropped item's age counts from here)
 
         Ent(int id, char kind, String type, UUID uuid, double x, double y, double z) {
             this.id = id;
@@ -150,6 +152,20 @@ final class World {
 
     static synchronized String skinOf(UUID u) {
         return u == null ? null : SKINS.get(u);
+    }
+
+    /** Mods asked for dropped items: read their metadata (which item, how many) even with the Play screen shut. */
+    static volatile boolean wantItems;
+
+    /** Dropped items: {entity id, item id (or null), count, x, y, z, ms on the ground}. */
+    static synchronized List<Object[]> items() {
+        List<Object[]> out = new java.util.ArrayList<Object[]>();
+        long now = System.currentTimeMillis();
+        for (Ent e : ENTS.values()) {
+            if (e.kind != 'i') continue;
+            out.add(new Object[]{e.id, e.item, e.itemCount, e.x, e.y, e.z, now - e.born});
+        }
+        return out;
     }
 
     static synchronized void putName(UUID u, String name) {

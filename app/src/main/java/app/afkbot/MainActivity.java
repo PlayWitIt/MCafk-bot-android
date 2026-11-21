@@ -515,6 +515,9 @@ public class MainActivity extends Activity implements Hub.Listener {
         hero.addView(startStop);
 
         buildPlayCard(col);
+        homeMods = new LinearLayout(this); // running add-ons with something to show (Harvest Hand's Start/Stop...)
+        homeMods.setOrientation(LinearLayout.VERTICAL);
+        col.addView(homeMods);
 
         LinearLayout grid1 = row(col);
         statHealth = tile(grid1, "Health");
@@ -1847,6 +1850,246 @@ public class MainActivity extends Activity implements Hub.Listener {
         return scroll(col);
     }
 
+    // ---------------------------------------------------------------- add-on panels: status lines, buttons, settings
+
+    private LinearLayout homeMods;
+    private int shownHomeModsVersion = -1, shownStatusVersion = -1;
+    /** Panels on screen: {mod, the box its status lines go in}. */
+    private final List<Object[]> panels = new java.util.ArrayList<Object[]>();
+
+    /** Home: a card for each running add-on that shows status or buttons (Harvest Hand's Start, Pause, Stop...). */
+    private void refreshHomeMods() {
+        shownHomeModsVersion = ModEngine.version;
+        if (homeMods == null) return;
+        for (java.util.Iterator<Object[]> it = panels.iterator(); it.hasNext(); ) if (Boolean.TRUE.equals(it.next()[2])) it.remove();
+        homeMods.removeAllViews();
+        for (ModEngine.Mod m : ModEngine.all()) {
+            if (!m.running || m.status == null && m.buttons == null) continue;
+            LinearLayout c = card(homeMods);
+            LinearLayout head = row(c);
+            ((LinearLayout.LayoutParams) head.getLayoutParams()).topMargin = 0;
+            head.addView(text(m.name, 16, TEXT, true), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+            TextView tag = text("ADD-ON", 10, ACCENT2, true);
+            tag.setPadding(dp(8), dp(3), dp(8), dp(3));
+            tag.setBackground(round((ACCENT2 & 0x00FFFFFF) | 0x22000000, dp(8), 0));
+            head.addView(tag);
+            modPanel(c, m, true);
+        }
+    }
+
+    private static int modColor(String name) {
+        switch (name == null ? "" : name) {
+            case "gold":
+                return 0xFFFFB84D;
+            case "gray":
+            case "grey":
+                return MUTED;
+            case "red":
+                return BAD;
+            case "green":
+                return GOOD;
+            case "yellow":
+                return WARN;
+            case "aqua":
+                return ACCENT2;
+            default:
+                return TEXT;
+        }
+    }
+
+    /** A mod's status lines, its buttons and (if it has settings) a Settings button. */
+    private void modPanel(LinearLayout c, final ModEngine.Mod m, boolean home) {
+        LinearLayout lines = new LinearLayout(this);
+        lines.setOrientation(LinearLayout.VERTICAL);
+        lines.setPadding(0, dp(6), 0, 0);
+        c.addView(lines);
+        panels.add(new Object[]{m, lines, home});
+        fillLines(lines, m);
+        org.json.JSONArray bs = m.buttons;
+        LinearLayout r = chipRow(c);
+        if (bs != null) {
+            for (int i = 0; i < bs.length(); i++) {
+                final org.json.JSONObject b = bs.optJSONObject(i);
+                if (b == null) continue;
+                final String id = b.optString("id");
+                actionChip(r, b.optString("label", id), new Runnable() {
+                    public void run() {
+                        haptic(homeMods);
+                        ModEngine.press(m, id);
+                    }
+                });
+                if (i == 0) { // the main action stands out
+                    TextView t = (TextView) r.getChildAt(r.getChildCount() - 1);
+                    t.setTextColor(Color.WHITE);
+                    t.setBackground(gradient(ACCENT, ACCENT2, dp(20)));
+                }
+                final String help = b.optString("help", "");
+                if (!help.isEmpty()) r.getChildAt(r.getChildCount() - 1).setOnLongClickListener(new View.OnLongClickListener() {
+                    public boolean onLongClick(View v) {
+                        toast(help);
+                        return true;
+                    }
+                });
+            }
+        }
+        if (m.settingsSpec != null) actionChip(r, "Settings", new Runnable() {
+            public void run() {
+                showModSettings(m, null);
+            }
+        });
+        if (r.getChildCount() == 0) ((View) r.getParent()).setVisibility(View.GONE);
+    }
+
+    private void fillLines(LinearLayout box, ModEngine.Mod m) {
+        box.removeAllViews();
+        org.json.JSONArray st = m.status;
+        if (st == null) return;
+        for (int i = 0; i < st.length(); i++) {
+            Object o = st.opt(i);
+            String t = o instanceof org.json.JSONObject ? ((org.json.JSONObject) o).optString("text") : String.valueOf(o);
+            int col = o instanceof org.json.JSONObject ? modColor(((org.json.JSONObject) o).optString("color")) : TEXT;
+            TextView tv = text(t, i == 0 ? 14 : 12, col, i == 0);
+            tv.setPadding(0, i == 0 ? 0 : dp(2), 0, 0);
+            box.addView(tv);
+        }
+    }
+
+    private void updatePanels() {
+        shownStatusVersion = ModEngine.statusVersion;
+        for (Object[] p : panels) fillLines((LinearLayout) p[1], (ModEngine.Mod) p[0]);
+    }
+
+    /** A mod's settings, as a form: tabs, switches, sliders and choices, each with its help underneath. */
+    private void showModSettings(final ModEngine.Mod m, String tabName) {
+        final org.json.JSONArray spec = m.settingsSpec;
+        if (spec == null) return;
+        final org.json.JSONObject cfg = m.config == null ? new org.json.JSONObject() : m.config;
+        java.util.List<String> tabs = new java.util.ArrayList<String>();
+        for (int i = 0; i < spec.length(); i++) {
+            String t = spec.optJSONObject(i).optString("tab", "");
+            if (!tabs.contains(t)) tabs.add(t);
+        }
+        final String current = tabName != null && tabs.contains(tabName) ? tabName : tabs.get(0);
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setPadding(dp(18), dp(8), dp(18), dp(8));
+        final android.app.AlertDialog[] dlg = new android.app.AlertDialog[1];
+        if (tabs.size() > 1) {
+            LinearLayout tr = chipRow(col);
+            for (final String t : tabs) {
+                actionChip(tr, t, new Runnable() {
+                    public void run() {
+                        if (t.equals(current)) return;
+                        dlg[0].dismiss();
+                        showModSettings(m, t);
+                    }
+                });
+                if (t.equals(current)) {
+                    TextView tv = (TextView) tr.getChildAt(tr.getChildCount() - 1);
+                    tv.setTextColor(Color.WHITE);
+                    tv.setBackground(gradient(ACCENT, ACCENT2, dp(20)));
+                }
+            }
+        }
+        for (int i = 0; i < spec.length(); i++) {
+            final org.json.JSONObject f = spec.optJSONObject(i);
+            if (!f.optString("tab", "").equals(current)) continue;
+            final String key = f.optString("key");
+            String type = f.optString("type");
+            LinearLayout item = new LinearLayout(this);
+            item.setOrientation(LinearLayout.VERTICAL);
+            item.setPadding(0, dp(14), 0, 0);
+            col.addView(item);
+            final TextView help = text(f.optString("help", ""), 12, MUTED, false);
+            if ("toggle".equals(type)) {
+                LinearLayout r = new LinearLayout(this);
+                r.setGravity(Gravity.CENTER_VERTICAL);
+                r.addView(text(f.optString("label", key), 15, TEXT, true), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+                Switch sw = new Switch(this);
+                sw.setChecked(cfg.optBoolean(key, f.optBoolean("default")));
+                int[][] states = {{android.R.attr.state_checked}, {}};
+                sw.setThumbTintList(new ColorStateList(states, new int[]{Color.WHITE, 0xFFB4BCD0}));
+                sw.setTrackTintList(new ColorStateList(states, new int[]{ACCENT, STROKE}));
+                sw.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
+                    public void onCheckedChanged(android.widget.CompoundButton b, boolean v) {
+                        ModEngine.setConfig(m, key, v);
+                    }
+                });
+                r.addView(sw);
+                item.addView(r);
+            } else if ("slider".equals(type)) {
+                final int min = f.optInt("min", 0), max = f.optInt("max", 100);
+                final TextView label = text("", 15, TEXT, true);
+                item.addView(label);
+                android.widget.SeekBar sb = new android.widget.SeekBar(this);
+                sb.setMax(max - min);
+                int v0 = cfg.optInt(key, f.optInt("default", min));
+                sb.setProgress(Math.max(0, Math.min(max - min, v0 - min)));
+                sb.setProgressTintList(ColorStateList.valueOf(ACCENT));
+                sb.setThumbTintList(ColorStateList.valueOf(Color.WHITE));
+                label.setText(sliderLabel(f, v0));
+                sb.setOnSeekBarChangeListener(new android.widget.SeekBar.OnSeekBarChangeListener() {
+                    public void onProgressChanged(android.widget.SeekBar s, int p, boolean user) {
+                        label.setText(sliderLabel(f, p + min));
+                    }
+
+                    public void onStartTrackingTouch(android.widget.SeekBar s) {
+                    }
+
+                    public void onStopTrackingTouch(android.widget.SeekBar s) {
+                        ModEngine.setConfig(m, key, s.getProgress() + min);
+                    }
+                });
+                item.addView(sb);
+            } else if ("choice".equals(type)) {
+                final org.json.JSONArray opts = f.optJSONArray("options");
+                String v0 = cfg.optString(key, f.optString("default"));
+                final TextView label = text(f.optString("label", key).replace("{v}", v0), 15, TEXT, true);
+                item.addView(label);
+                final LinearLayout r = chipRow(item);
+                final org.json.JSONObject helps = f.optJSONObject("helps");
+                if (helps != null) help.setText(helps.optString(v0, help.getText().toString()));
+                for (int k = 0; opts != null && k < opts.length(); k++) {
+                    final String o = opts.optString(k);
+                    actionChip(r, o, new Runnable() {
+                        public void run() {
+                            ModEngine.setConfig(m, key, o);
+                            label.setText(f.optString("label", key).replace("{v}", o));
+                            if (helps != null) help.setText(helps.optString(o, ""));
+                            for (int q = 0; q < r.getChildCount(); q++) {
+                                TextView tv = (TextView) r.getChildAt(q);
+                                boolean sel = tv.getText().toString().equals(o);
+                                tv.setTextColor(sel ? Color.WHITE : TEXT);
+                                tv.setBackground(sel ? gradient(ACCENT, ACCENT2, dp(20)) : round(SURFACE2, dp(20), ACCENT));
+                            }
+                        }
+                    });
+                    if (o.equals(v0)) {
+                        TextView tv = (TextView) r.getChildAt(r.getChildCount() - 1);
+                        tv.setTextColor(Color.WHITE);
+                        tv.setBackground(gradient(ACCENT, ACCENT2, dp(20)));
+                    }
+                }
+            }
+            if (help.getText().length() > 0) {
+                help.setPadding(0, dp(4), 0, 0);
+                item.addView(help);
+            }
+        }
+        dlg[0] = new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle(m.name)
+                .setView(scroll(col))
+                .setPositiveButton("Done", null)
+                .show();
+    }
+
+    /** A slider's label: {v} is the value, {half} half of it ("4.0" hearts); "labels" can name a value outright. */
+    private static String sliderLabel(org.json.JSONObject f, int v) {
+        org.json.JSONObject named = f.optJSONObject("labels");
+        if (named != null && named.has(String.valueOf(v))) return named.optString(String.valueOf(v));
+        return f.optString("label", f.optString("key")).replace("{v}", String.valueOf(v)).replace("{half}", String.valueOf(v / 2.0));
+    }
+
     // ---------------------------------------------------------------- Mods
 
     private static final int PICK_MOD = 42;
@@ -1928,6 +2171,8 @@ public class MainActivity extends Activity implements Hub.Listener {
     private void refreshMods() {
         if (modsList == null) return;
         shownModsVersion = ModEngine.version;
+        panels.clear();
+        refreshHomeMods();
         modsList.removeAllViews();
         List<ModEngine.Mod> mods = ModEngine.all();
         if (mods.isEmpty()) {
@@ -1954,6 +2199,7 @@ public class MainActivity extends Activity implements Hub.Listener {
             sw.setThumbTintList(new ColorStateList(states, new int[]{Color.WHITE, 0xFFB4BCD0}));
             sw.setTrackTintList(new ColorStateList(states, new int[]{ACCENT, STROKE}));
             head.addView(sw);
+            if (m.running && (m.status != null || m.buttons != null || m.settingsSpec != null)) modPanel(c, m, false);
             sw.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
                 public void onCheckedChanged(android.widget.CompoundButton b, boolean v) {
                     ModStore.setEnabled(MainActivity.this, m.id, v);
@@ -2902,6 +3148,11 @@ public class MainActivity extends Activity implements Hub.Listener {
             tabLabels[T_NON].setText(unread > 0 ? "NoN " + unread : "NoN");
             tabLabels[T_NON].setTextColor(unread > 0 ? NonPage.WHISPER : tab == T_NON ? TEXT : MUTED);
         }
+        if (ModEngine.version != shownHomeModsVersion) {
+            if (tab == T_MODULES) refreshMods();
+            else refreshHomeMods();
+        }
+        if (ModEngine.statusVersion != shownStatusVersion) updatePanels();
         if (tab == T_MODULES) {
             if (ModEngine.version != shownModsVersion) refreshMods();
         } else if (tab == T_CHAT) {

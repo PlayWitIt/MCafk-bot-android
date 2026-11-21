@@ -169,6 +169,7 @@ final class GameHud extends View {
         float hotTop = drawHotbar(c, w, h);
         if (survival) hotTop = drawStatus(c, w, hotTop);
         drawChat(c, hotTop);
+        drawModStatus(c);
         drawNameTags(c);
         if (!menu) {
             drawTargetName(c, w);
@@ -287,6 +288,46 @@ final class GameHud extends View {
             c.drawRect(0, y - s, maxW + 4 * s, y + lh - s, ui);
             text(c, msg, 2 * s, y, Color.argb((int) (255 * alpha), 255, 255, 255), true, s);
             y -= lh;
+        }
+    }
+
+    /** Add-ons' status lines (Harvest Hand's...), top left, in the game's own chat colours. */
+    private void drawModStatus(Canvas c) {
+        float s = Math.max(1, gui * 0.75f), lh = 11 * s, y = 4 * s;
+        for (ModEngine.Mod m : ModEngine.all()) {
+            org.json.JSONArray st = m.status;
+            if (!m.running || st == null || !m.statusOnScreen) continue;
+            for (int i = 0; i < st.length(); i++) {
+                org.json.JSONObject l = st.optJSONObject(i);
+                if (l == null) continue;
+                String t = GameFont.strip(l.optString("text"));
+                float tw = textWidth(t, s);
+                ui.setColor(0x90000000);
+                c.drawRect(2 * s, y - 2 * s, 6 * s + tw, y + 9 * s, ui);
+                text(c, t, 4 * s, y, mcColor(l.optString("color")), true, s);
+                y += lh;
+            }
+        }
+    }
+
+    /** The game's text colours: gold §6, gray §7, red §c, green §a, yellow §e, aqua §b. */
+    private static int mcColor(String name) {
+        switch (name) {
+            case "gold":
+                return 0xFFFFAA00;
+            case "gray":
+            case "grey":
+                return 0xFFAAAAAA;
+            case "red":
+                return 0xFFFF5555;
+            case "green":
+                return 0xFF55FF55;
+            case "yellow":
+                return 0xFFFFFF55;
+            case "aqua":
+                return 0xFF55FFFF;
+            default:
+                return 0xFFFFFFFF;
         }
     }
 

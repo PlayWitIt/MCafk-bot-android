@@ -317,6 +317,7 @@ final class ProtoDef {
         final JSONObject packets;
         final String[] itemNames;
         final String[] itemIds; // internal names, null for data generated before they were added
+        final int[] itemStack, itemDurability; // max stack size and max durability (0: none) per item, or null
         final String[] metaTypes; // entity metadata value type names by id ("item_stack"...), or empty
         final int[] blockMin;
         final String[] blockNames;
@@ -356,6 +357,8 @@ final class ProtoDef {
                 itemIds = new String[iid.length()];
                 for (int i = 0; i < iid.length(); i++) itemIds[i] = iid.getString(i);
             } else itemIds = null;
+            itemStack = ints(root.optJSONArray("itemStack"));
+            itemDurability = ints(root.optJSONArray("itemDurability"));
             JSONArray bm = root.optJSONArray("blockMin"), bn = root.optJSONArray("blockNames");
             int k = bm == null || bn == null ? 0 : Math.min(bm.length(), bn.length());
             blockMin = new int[k];
@@ -451,6 +454,30 @@ final class ProtoDef {
             } catch (org.json.JSONException e) {
                 throw new IOException(e.getMessage());
             }
+        }
+
+        private static int[] ints(JSONArray a) throws org.json.JSONException {
+            if (a == null) return null;
+            int[] r = new int[a.length()];
+            for (int i = 0; i < r.length; i++) r[i] = a.getInt(i);
+            return r;
+        }
+
+        /** How many of an item fit in one slot (64 if unknown). */
+        int maxStack(int id) {
+            return itemStack != null && id >= 0 && id < itemStack.length ? itemStack[id] : 64;
+        }
+
+        /** An item's durability when new (0: it doesn't wear). */
+        int maxDurability(int id) {
+            return itemDurability != null && id >= 0 && id < itemDurability.length ? itemDurability[id] : 0;
+        }
+
+        /** The block id of a state ("carrots"), or "" if unknown. */
+        String blockId(int state) {
+            int i = java.util.Arrays.binarySearch(blockMin, state);
+            if (i < 0) i = -i - 2;
+            return i >= 0 && i < blockIds.length ? blockIds[i] : "";
         }
 
         /** Internal item name ("diamond_sword"), or "" if unknown. */

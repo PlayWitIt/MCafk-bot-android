@@ -70,6 +70,13 @@ final class ModEngine {
         long chatWindowStart;
         int chatInWindow;
         long lastChat;
+        // what the app shows for it: a settings form (mod.settings), buttons (mod.buttons) and status lines (mod.status)
+        volatile JSONArray settingsSpec, buttons, status;
+        /** Its status lines also show on the Play screen (top left). */
+        volatile boolean statusOnScreen = true;
+        /** Chat commands it handles ("hh" for /hh ...): typed in the app, they go to the mod, not the server. */
+        final java.util.Set<String> commands = java.util.Collections.synchronizedSet(new java.util.HashSet<String>());
+        volatile JSONObject config;
 
         Mod(String id, String code) {
             this.id = id;
@@ -107,7 +114,7 @@ final class ModEngine {
         return def;
     }
 
-    private static final int BUDGET = 3_000_000; // instructions per event/timer call
+    private static final int BUDGET = 20_000_000; // instructions per event/timer call (a big farm scan fits; an endless loop is stopped within a second or two)
     private static final int MAX_ERRORS = 5;
 
     static volatile Host host;
@@ -115,6 +122,7 @@ final class ModEngine {
     private static final ExecutorService EXEC = Executors.newSingleThreadExecutor();
     private static ScheduledExecutorService timer;
     static volatile int version; // bumps when the mod list/state changes (for the UI)
+    static volatile int statusVersion; // bumps when a mod's status lines change (shown in place, no rebuild)
 
     // ---------------------------------------------------------------- sandboxed Rhino
 
@@ -173,9 +181,75 @@ final class ModEngine {
             "  disconnect: function(r) { __api('disconnect', String(r || 'disconnected by a mod')); }\n" +
             "};\n" +
             "var console = { log: function() { bot.log(Array.prototype.join.call(arguments, ' ')); } };\n" +
+            // ---- settings, buttons and status the app shows; walking, clicking, inventory and the world
+            "var __lastButtons = null, __lastStatus = null;\n" +
+            "mod.config = {};\n" +
+            "mod.settings = function(spec) { mod.config = JSON.parse(__api('settings', JSON.stringify(spec))); return mod.config; };\n" +
+            "mod.saveSettings = function() { __api('saveConfig', JSON.stringify(mod.config)); };\n" +
+            "mod.buttons = function(list) { var j = JSON.stringify(list || []); if (j !== __lastButtons) { __lastButtons = j; __api('buttons', j); } };\n" +
+            "mod.status = function(lines, opts) { var j = JSON.stringify({lines: lines || [], screen: !(opts && opts.screen === false)}); if (j !== __lastStatus) { __lastStatus = j; __api('status', j); } };\n" +
+            "mod.say = function(t) { __api('say', String(t)); };\n" +
+            "var __cmds = {};\n" +
+            "mod.command = function(names, fn) { if (typeof names === 'string') names = [names]; for (var i = 0; i < names.length; i++) { var n = String(names[i]).toLowerCase(); __cmds[n] = fn; __api('command', n); } };\n" +
+            "function __command(name, args) { var f = __cmds[name]; if (f) f(args === '' ? [] : args.split(' ').filter(function(s) { return s.length > 0; })); }\n" +
+            "function __setcfg(k, j) { mod.config[k] = JSON.parse(j); __dispatch('settings', JSON.stringify({key: k, value: mod.config[k]})); }\n" +
+            "bot.body = function() { var j = __api('body'); return j ? JSON.parse(j) : null; };\n" +
+            "bot.control = function(on) { __api('control', !!on); };\n" +
+            "bot.look = function(yaw, pitch) { __api('look', yaw, pitch); };\n" +
+            "bot.lookAt = function(x, y, z) { var b = bot.body(); if (!b) return; var dx = x - b.x, dy = y - (b.y + 1.62), dz = z - b.z;\n" +
+            "  bot.look(Math.atan2(dz, dx) * 180 / Math.PI - 90, -Math.atan2(dy, Math.sqrt(dx * dx + dz * dz)) * 180 / Math.PI); };\n" +
+            "bot.hit = function(x, y, z, face) { return __api('hit', x, y, z, face === undefined ? 1 : face); };\n" +
+            "bot.mine = function(x, y, z, face) { __api('mine', x, y, z, face === undefined ? 1 : face); };\n" +
+            "bot.mining = function() { return __api('mining'); };\n" +
+            "bot.stopMining = function() { __api('stopMining'); };\n" +
+            "bot.useOn = function(x, y, z, face, cx, cy, cz) { __api('useOn', x, y, z, face, cx === undefined ? 0.5 : cx, cy === undefined ? 0.5 : cy, cz === undefined ? 0.5 : cz); };\n" +
+            "bot.useItem = function() { __api('useItem'); };\n" +
+            "bot.releaseUse = function() { __api('releaseUse'); };\n" +
+            "bot.swing = function() { __api('swing'); };\n" +
+            "var inv = {\n" +
+            "  items: function() { return JSON.parse(__api('inv')); },\n" +
+            "  held: function() { return __api('held'); },\n" +
+            "  select: function(i) { __api('select', i); },\n" +
+            "  swap: function(i, hotbar) { __api('swap', i, hotbar); },\n" +
+            "  container: function() { var j = __api('container'); return j ? JSON.parse(j) : null; },\n" +
+            "  quickMove: function(slot) { return __api('quickMove', slot); },\n" +
+            "  close: function() { __api('closeContainer'); }\n" +
+            "};\n" +
+            "var world = {\n" +
+            "  block: function(x, y, z) { return __api('block', x, y, z); },\n" +
+            "  prop: function(x, y, z, p) { return __api('prop', x, y, z, p); },\n" +
+            "  passable: function(x, y, z) { return __api('passable', x, y, z); },\n" +
+            "  standable: function(x, y, z) { return __api('standable', x, y, z); },\n" +
+            "  wet: function(x, y, z) { return __api('wet', x, y, z); },\n" +
+            "  fluid: function(x, y, z) { return __api('fluid', x, y, z); },\n" +
+            "  replaceable: function(x, y, z) { return __api('replaceable', x, y, z); },\n" +
+            "  hardness: function(x, y, z) { return __api('hardness', x, y, z); },\n" +
+            "  blockEntity: function(x, y, z) { return __api('blockEntity', x, y, z); },\n" +
+            "  solidSide: function(x, y, z, dir) { return __api('solidSide', x, y, z, dir); },\n" +
+            "  loaded: function(x, z) { return __api('loaded', x, z); },\n" +
+            "  waterNear: function(x, y, z, r, dy) { return __api('waterNear', x, y, z, r, dy === undefined ? 0 : dy); },\n" +
+            "  lookedAt: function() { var j = __api('lookedAt'); return j ? JSON.parse(j) : null; },\n" +
+            "  outlineTop: function(x, y, z) { return __api('outlineTop', x, y, z); },\n" +
+            "  predict: function(x, y, z, id) { __api('predict', x, y, z, id); },\n" +
+            "  items: function() { return JSON.parse(__api('items')).map(function(a) { return {entity: a[0], id: a[1], count: a[2], x: a[3], y: a[4], z: a[5], age: a[6]}; }); },\n" +
+            "  mobs: function(r) { return JSON.parse(__api('mobs', r)); },\n" +
+            "  flood: function(x, y, z, r) { return JSON.parse(__api('flood', x, y, z, r)); }\n" +
+            "};\n" +
+            "var nav = {\n" +
+            "  plan: function(goal, bounds) { return __api('navPlan', JSON.stringify(goal), JSON.stringify(bounds)); },\n" +
+            "  tick: function() { return __api('navTick'); },\n" +
+            "  arrived: function() { return __api('navArrived'); },\n" +
+            "  moving: function() { return __api('navMoving'); },\n" +
+            "  stop: function() { __api('navStop'); },\n" +
+            "  clear: function() { __api('navClear'); },\n" +
+            "  sprint: function(on) { __api('navSprint', !!on); },\n" +
+            "  careful: function(on) { __api('navCareful', !!on); },\n" +
+            "  magmaOk: function(on) { __api('magmaOk', !!on); }\n" +
+            "};\n" +
             "function __dispatch(ev, json) { var hs = __h[ev]; if (!hs) return; var d = json ? JSON.parse(json) : {};\n" +
             "  for (var i = 0; i < hs.length; i++) hs[i](d); }\n" +
             "function __has(ev) { return !!__h[ev]; }\n" +
+            "function __tick() { var hs = __h.tick; if (!hs) return; for (var i = 0; i < hs.length; i++) hs[i]({}); }\n" +
             "function __timers(now) { var due = __t.filter(function(t) { return t.next <= now; });\n" +
             "  for (var i = 0; i < due.length; i++) { var t = due[i]; if (t.rep) t.next = now + t.ms; else mod.cancel(t.id); t.fn(); } }\n";
 
@@ -233,6 +307,9 @@ final class ModEngine {
                         modLog(mod, "requested disconnect: " + arg(args, 1));
                         h.disconnect(mod.name + ": " + arg(args, 1));
                         return Undefined.instance;
+                    case "command":
+                        mod.commands.add(arg(args, 1));
+                        return Undefined.instance;
                     case "sget": {
                         String k = arg(args, 1);
                         return mod.storage.has(k) ? mod.storage.get(k).toString() : null;
@@ -249,8 +326,12 @@ final class ModEngine {
                         h.saveStorage(mod.id, mod.storage.toString());
                         return Undefined.instance;
                     }
-                    default:
-                        return Undefined.instance;
+                    default: {
+                        Object r = ModBridge.call(mod, fn, args);
+                        if (r == ModBridge.UNHANDLED) return Undefined.instance;
+                        if (r instanceof Integer) return ((Integer) r).doubleValue();
+                        return r;
+                    }
                 }
             } catch (org.json.JSONException e) {
                 return Undefined.instance;
@@ -372,7 +453,106 @@ final class ModEngine {
                 if (m.running) modLog(m, "stopped");
                 m.running = false;
                 m.scope = null;
+                m.status = null;
+                m.buttons = null;
+                releaseBot();
                 version++;
+            }
+        });
+    }
+
+    /** A mod stopped: the bot walks for nobody now (anti-AFK takes over again). */
+    private static void releaseBot() {
+        Bot b = Hub.bot;
+        if (b == null || !b.modControl) return;
+        for (Mod o : all()) if (o.running && o.status != null) return; // another mod may still be using it
+        b.modControl = false;
+        b.nav.clear();
+    }
+
+    // ---------------------------------------------------------------- the app's side
+
+    /** You changed a setting in the mod's settings form. */
+    static void setConfig(final Mod m, final String key, final Object value) {
+        EXEC.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    JSONObject c = m.config == null ? new JSONObject() : m.config;
+                    c.put(key, value);
+                    m.config = c;
+                    m.storage.put("__config", c.toString());
+                    saveStorage(m);
+                    String arr = new JSONArray().put(value).toString(); // the value as JSON: "[v]" without the brackets
+                    if (m.running) call(m, "__setcfg", new Object[]{key, arr.substring(1, arr.length() - 1)});
+                } catch (org.json.JSONException ignored) {
+                }
+                version++;
+            }
+        });
+    }
+
+    /**
+     * A chat line you typed: if it's a command a running mod registered (/hh ...), the mod gets it and true comes
+     * back (it isn't sent to the server).
+     */
+    static boolean handleCommand(String text) {
+        if (text == null || !text.startsWith("/")) return false;
+        String body = text.substring(1).trim();
+        int sp = body.indexOf(' ');
+        final String name = (sp < 0 ? body : body.substring(0, sp)).toLowerCase(Locale.ROOT);
+        final String args = sp < 0 ? "" : body.substring(sp + 1).trim();
+        for (final Mod m : all()) {
+            if (!m.running || !m.commands.contains(name)) continue;
+            EXEC.execute(new Runnable() {
+                @Override
+                public void run() {
+                    if (m.running) call(m, "__command", new Object[]{name, args});
+                }
+            });
+            return true;
+        }
+        return false;
+    }
+
+    /** You pressed one of the mod's buttons. */
+    static void press(final Mod m, final String id) {
+        EXEC.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    if (m.running) call(m, "__dispatch", new Object[]{"button", new JSONObject().put("id", id).toString()});
+                } catch (org.json.JSONException ignored) {
+                }
+            }
+        });
+    }
+
+    static void saveStorage(Mod m) {
+        Host h = host;
+        if (h != null) h.saveStorage(m.id, m.storage.toString());
+    }
+
+    private static final java.util.concurrent.atomic.AtomicBoolean TICK_QUEUED = new java.util.concurrent.atomic.AtomicBoolean();
+
+    /**
+     * Every game tick (20 a second): the "tick" event for mods that listen to it. If mods are still busy with the
+     * last one, this one is skipped rather than piling up.
+     */
+    static void tick() {
+        boolean any = false;
+        for (Mod m : all()) any |= m.running;
+        if (!any || !TICK_QUEUED.compareAndSet(false, true)) return;
+        EXEC.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    for (Mod m : all()) {
+                        if (m.running) call(m, "__tick", null);
+                    }
+                } finally {
+                    TICK_QUEUED.set(false);
+                }
             }
         });
     }
@@ -443,6 +623,7 @@ final class ModEngine {
 
     /** Must run on EXEC. */
     private static void call(Mod m, String fn, Object[] args) {
+        if (args == null) args = new Object[0];
         Scriptable scope = m.scope;
         if (scope == null) return;
         Context cx = FACTORY.enterContext();
@@ -457,6 +638,9 @@ final class ModEngine {
             if (m.errors >= MAX_ERRORS) {
                 m.running = false;
                 m.scope = null;
+                m.status = null;
+                m.buttons = null;
+                releaseBot();
                 modLog(m, "turned off after " + MAX_ERRORS + " errors - fix it and switch it back on");
                 Host h = host;
                 if (h != null) h.alert("Mod turned off", m.name + ": " + m.lastError);

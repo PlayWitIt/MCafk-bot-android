@@ -13,6 +13,12 @@ final class Inv {
         final int id, count;
         final String name;
         final String detail; // e.g. "Shulker contents: 12 items" or enchantments count
+        // for mods: the internal id ("carrot"), how many fit in a slot, wear, enchantment levels by name, and what's
+        // inside (shulker boxes; null when it holds nothing / isn't a container)
+        String key = "";
+        int maxCount = 64, damage, maxDamage;
+        java.util.Map<String, Integer> enchants;
+        List<Item> contents;
 
         Item(int id, int count, String name, String detail) {
             this.id = id;
@@ -67,6 +73,9 @@ final class Inv {
         String name = vd.itemName(id);
         String detail = "";
         Object comps = m.get("components");
+        int damage = 0, maxDamage = vd.maxDurability(id), maxCount = vd.maxStack(id);
+        java.util.Map<String, Integer> enchants = null;
+        List<Item> contents = null;
         if (comps instanceof List) {
             int ench = 0;
             for (Object c : (List<Object>) comps) {
@@ -79,25 +88,46 @@ final class Inv {
                     if (!n.isEmpty()) name = n;
                 } else if ("container".equals(type)) {
                     int inside = 0;
+                    contents = new ArrayList<Item>();
                     if (data instanceof List) {
                         for (Object x : (List<Object>) data) {
                             Item it = fromSlot(x instanceof Map && ((Map<String, Object>) x).containsKey("item") ? ((Map<String, Object>) x).get("item") : x, vd);
-                            if (it != null) inside += it.count;
+                            if (it != null) {
+                                inside += it.count;
+                                contents.add(it);
+                            }
                         }
                     } else if (data instanceof Map) {
                         Object list = ((Map<String, Object>) data).values().iterator().hasNext() ? ((Map<String, Object>) data).values().iterator().next() : null;
                         if (list instanceof List) for (Object x : (List<Object>) list) {
                             Item it = fromSlot(x, vd);
-                            if (it != null) inside += it.count;
+                            if (it != null) {
+                                inside += it.count;
+                                contents.add(it);
+                            }
                         }
                     }
                     detail = inside > 0 ? "contains " + inside + " items" : "empty";
                 } else if ("enchantments".equals(type) && data instanceof Map) {
                     Object e = ((Map<String, Object>) data).get("enchantments");
-                    if (e instanceof List) ench = ((List<Object>) e).size();
+                    if (e instanceof List) {
+                        ench = ((List<Object>) e).size();
+                        enchants = new java.util.HashMap<String, Integer>();
+                        String[] names = enchantNames;
+                        for (Object x : (List<Object>) e) {
+                            if (!(x instanceof Map)) continue;
+                            int eid = num(((Map<String, Object>) x).get("id")), lvl = num(((Map<String, Object>) x).get("level"));
+                            enchants.put(names != null && eid >= 0 && eid < names.length ? names[eid] : "#" + eid, lvl);
+                        }
+                    }
                 } else if ("damage".equals(type)) {
                     int dmg = num(data);
+                    damage = dmg;
                     if (dmg > 0) detail = detail.isEmpty() ? "damage " + dmg : detail;
+                } else if ("max_damage".equals(type)) {
+                    maxDamage = num(data);
+                } else if ("max_stack_size".equals(type)) {
+                    maxCount = num(data);
                 }
             }
             if (ench > 0) detail = (detail.isEmpty() ? "" : detail + ", ") + ench + " enchantment" + (ench > 1 ? "s" : "");
@@ -114,8 +144,37 @@ final class Inv {
                 }
             }
         }
-        return new Item(id, count, name, detail);
+        Item it = new Item(id, count, name, detail);
+        it.key = vd.itemId(id);
+        it.maxCount = maxCount;
+        it.damage = damage;
+        it.maxDamage = maxDamage;
+        it.enchants = enchants;
+        it.contents = contents;
+        return it;
     }
+
+    /** A copy with another count (for predicting what a click does before the server says). */
+    static Item withCount(Item o, int count) {
+        if (count <= 0) return null;
+        Item it = new Item(o.id, count, o.name, o.detail);
+        it.key = o.key;
+        it.maxCount = o.maxCount;
+        it.damage = o.damage;
+        it.maxDamage = o.maxDamage;
+        it.enchants = o.enchants;
+        it.contents = o.contents;
+        return it;
+    }
+
+    /** Enchantment names in the server's registry order (enchantment ids in items are positions in it). */
+    static volatile String[] enchantNames;
+    /** The open container's menu type (the game's menu registry: 2 generic 9x3, 5 generic 9x6, 20 shulker box...), -1 if unknown. */
+    static volatile int type = -1;
+    /** The open container was opened by a mod (so it's not you using it). */
+    static volatile boolean openedByMod;
+    /** When a mod last right-clicked a container. */
+    static volatile long modOpenAt;
 
     /** Rejects nonsense that means the item data was misread. */
     static boolean plausible(Item it, ProtoDef.VersionData vd) {

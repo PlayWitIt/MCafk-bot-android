@@ -761,6 +761,18 @@ final class Bot {
                         }
                     }
                     GameState.biomeNames = names;
+                } else if (reg.equals("minecraft:enchantment")) { // item enchantments are positions in this list (mods: Fortune)
+                    int n = p.varInt();
+                    String[] names = new String[Math.max(0, Math.min(n, 4096))];
+                    for (int i = 0; i < names.length; i++) {
+                        String key = p.str();
+                        names[i] = key.startsWith("minecraft:") ? key.substring(10) : key;
+                        if (p.bool()) {
+                            int t = p.u8();
+                            if (t != 0) MapData.skipNbt(p, t);
+                        }
+                    }
+                    Inv.enchantNames = names;
                 }
             } catch (IOException ignored) {
                 // never let this stop the login
@@ -938,7 +950,10 @@ final class Bot {
                     break;
                 case "item_stack": {
                     Inv.Item it = Inv.fromSlot(vdata.def.read(slotType, p), vdata);
-                    if (it != null) e.item = vdata.itemId(it.id);
+                    if (it != null) {
+                        e.item = vdata.itemId(it.id);
+                        e.itemCount = it.count;
+                    }
                     return;
                 }
                 default:
@@ -964,7 +979,7 @@ final class Bot {
             World.add(e);
             if (kind == 'p') onPlayerSeen(e);
         } else if (pid == id(Proto.P_C_ENTITY_METADATA)) {
-            if (GameState.open) readItemMetadata(p);
+            if (GameState.open || World.wantItems) readItemMetadata(p);
         } else if (pid == id(Proto.P_C_ENTITY_DESTROY)) {
             int n = p.varInt();
             for (int i = 0; i < n; i++) {
@@ -1082,6 +1097,8 @@ final class Bot {
             Object t = m.get("windowTitle");
             Inv.title = t instanceof String && ((String) t).startsWith("{") ? Text.fromJson((String) t) : Text.strip(Text.flatten(t));
             Inv.openId = Inv.num(m.get("windowId"));
+            Inv.type = m.containsKey("inventoryType") ? Inv.num(m.get("inventoryType")) : -1;
+            Inv.openedByMod = System.currentTimeMillis() - Inv.modOpenAt < 3000;
             Inv.slots = new java.util.ArrayList<Inv.Item>();
             Inv.status = "";
             Inv.version++;
@@ -1289,6 +1306,11 @@ final class Bot {
     void useBlock(final int bx, final int by, final int bz, final int face) {
         final ScheduledExecutorService t = ticker;
         if (t == null || state != PLAY || id(Proto.P_S_USE_ITEM_ON) < 0) return;
+        try { // mods see what you right-click, and with what (placing a chest, opening one...)
+            Inv.Item h = Inv.heldItem();
+            ModEngine.emit("useBlock", new JSONObject().put("x", bx).put("y", by).put("z", bz).put("face", face).put("item", h == null ? "" : h.key));
+        } catch (org.json.JSONException ignored) {
+        }
         t.execute(new Runnable() {
             @Override
             public void run() {
@@ -1386,6 +1408,195 @@ final class Bot {
                     Buf b = new Buf(id(Proto.P_S_CLOSE_WINDOW));
                     writeContainerId(b, wid);
                     send(b);
+                } catch (IOException ignored) {
+                }
+            }
+        });
+    }
+
+    // ----- mods: walking, looking and clicking, sent inside the tick -----
+
+    /** The walker mods drive (see ModNav). */
+    final ModNav nav = new ModNav();
+    /** A mod is driving: anti-AFK waits, the bot's physics runs with ModNav's keys. */
+    volatile boolean modControl;
+    private boolean modHadControl, manualBeforeMod;
+    private final java.util.concurrent.ConcurrentLinkedQueue<Runnable> modQueue = new java.util.concurrent.ConcurrentLinkedQueue<Runnable>();
+    /** A block a mod is breaking over several ticks: {x, y, z, face, ticks needed, ticks so far}, or null. */
+    private volatile int[] modMining;
+
+    private final ModNav.Body navBody = new ModNav.Body() {
+        public double x() {
+            return x;
+        }
+
+        public double y() {
+            return y;
+        }
+
+        public double z() {
+            return z;
+        }
+
+        public boolean onGround() {
+            return onGroundM;
+        }
+
+        public boolean hCollide() {
+            return hCollideM;
+        }
+
+        public boolean inWater() {
+            return inWater;
+        }
+
+        public int food() {
+            return GameState.food;
+        }
+
+        public void keys(boolean forward, boolean jump, boolean sprint, boolean sneak) {
+            inForward = forward ? 1 : 0;
+            inStrafe = 0;
+            inJump = jump;
+            inSprint = sprint;
+            inSneak = sneak;
+        }
+
+        public void face(float yaw) {
+            lookYaw = yaw;
+        }
+    };
+
+    /** The bot's own position (feet) and whether it's standing on something: {x, y, z, onGround, inWater}. */
+    synchronized double[] modBody() {
+        return new double[]{x, y, z, onGroundM ? 1 : 0, inWater ? 1 : 0};
+    }
+
+    /** Where you're looking: {yaw, pitch}. */
+    synchronized float[] modLookAngles() {
+        return new float[]{manual ? lookYaw : yaw, manual ? lookPitch : pitch};
+    }
+
+    /** Turns the head (sent with the next move, like the real client). */
+    synchronized void modLook(float yaw, float pitch) {
+        lookYaw = yaw;
+        lookPitch = Math.max(-90, Math.min(90, pitch));
+        if (!manual) {
+            this.yaw = lookYaw;
+            this.pitch = lookPitch;
+        }
+    }
+
+    /** Queues a packet-sending action for the end of the next tick. */
+    void modDo(Runnable r) {
+        modQueue.add(r);
+    }
+
+    private void modActions() {
+        Runnable r;
+        while ((r = modQueue.poll()) != null) {
+            try {
+                r.run();
+            } catch (RuntimeException e) {
+                Hub.log("A mod action failed: " + e);
+            }
+        }
+        int[] mm = modMining;
+        if (mm != null) {
+            try {
+                mm[5]++;
+                send(new Buf(id(Proto.P_S_SWING)).varInt(0));
+                if (mm[5] >= mm[4]) {
+                    send(new Buf(id(Proto.P_S_BLOCK_DIG)).varInt(2).i64(packPos(mm[0], mm[1], mm[2])).u8(mm[3]).varInt(++useSequence));
+                    modMining = null;
+                }
+            } catch (IOException ignored) {
+            }
+        }
+    }
+
+    /** Left click on a block (starts breaking it; blocks with no hardness break at once). Call from a queued action. */
+    void sendDig(int action, int bx, int by, int bz, int face) throws IOException {
+        send(new Buf(id(Proto.P_S_BLOCK_DIG)).varInt(action).i64(packPos(bx, by, bz)).u8(face).varInt(++useSequence));
+    }
+
+    void sendSwing() throws IOException {
+        send(new Buf(id(Proto.P_S_SWING)).varInt(0));
+    }
+
+    /** Right click on a block at an exact point (cursor 0..1 on the block). Call from a queued action. */
+    void sendUseOn(int bx, int by, int bz, int face, float cx, float cy, float cz) throws IOException {
+        Buf b = new Buf(id(Proto.P_S_USE_ITEM_ON)).varInt(0).i64(packPos(bx, by, bz)).varInt(face).f32(cx).f32(cy).f32(cz).bool(false);
+        if (proto >= 768) b.bool(false);
+        b.varInt(++useSequence);
+        send(b);
+    }
+
+    /** Right click in the air with the held item (eat...). Call from a queued action. */
+    void sendUseItem() throws IOException {
+        Buf b = new Buf(id(Proto.P_S_USE_ITEM)).varInt(0).varInt(++useSequence);
+        synchronized (this) {
+            if (proto >= 767) b.f32(yaw).f32(pitch);
+        }
+        send(b);
+    }
+
+    /** Lets go of the use key (stops eating...). Call from a queued action. */
+    void sendReleaseUse() throws IOException {
+        send(new Buf(id(Proto.P_S_BLOCK_DIG)).varInt(5).i64(0).u8(0).varInt(0));
+    }
+
+    void sendHeldSlot(int slot) throws IOException {
+        Inv.held = slot;
+        Inv.version++;
+        send(new Buf(id(Proto.P_S_HELD_SLOT)).u16(slot));
+    }
+
+    void sendWindowClick(int windowId, int slot, int button, int mode) throws IOException {
+        Buf b = new Buf(id(Proto.P_S_WINDOW_CLICK));
+        writeContainerId(b, windowId);
+        b.varInt(Inv.stateId).u16(slot).u8(button).varInt(mode).varInt(0);
+        if (proto >= 770) b.bool(false);
+        else if (proto >= 766) b.varInt(0);
+        else b.bool(false);
+        send(b);
+    }
+
+    void sendCloseWindow(int windowId) throws IOException {
+        Buf b = new Buf(id(Proto.P_S_CLOSE_WINDOW));
+        writeContainerId(b, windowId);
+        send(b);
+    }
+
+    /** Breaks a block over the right number of ticks (for the held item), swinging, like holding left click. */
+    void modMine(final int bx, final int by, final int bz, final int face) {
+        int st = MapData.stateAt(bx, by, bz);
+        final int ticks = st > 0 ? breakTicks(st) : -1;
+        if (ticks < 0) return;
+        modDo(new Runnable() {
+            public void run() {
+                try {
+                    sendDig(0, bx, by, bz, face);
+                    sendSwing();
+                    if (ticks == 0) return;
+                    modMining = new int[]{bx, by, bz, face, ticks, 0};
+                } catch (IOException ignored) {
+                }
+            }
+        });
+    }
+
+    boolean modMining() {
+        return modMining != null;
+    }
+
+    void modStopMining() {
+        final int[] mm = modMining;
+        modMining = null;
+        if (mm != null) modDo(new Runnable() {
+            public void run() {
+                try {
+                    sendDig(1, mm[0], mm[1], mm[2], mm[3]);
                 } catch (IOException ignored) {
                 }
             }
@@ -1860,6 +2071,7 @@ final class Bot {
 
     /** Sends a chat message, or a command if it starts with "/". Safe to call from any thread. */
     void sendChat(final String text) {
+        if (ModEngine.handleCommand(text)) return; // a mod's own command (/hh ...): not for the server
         final ScheduledExecutorService t = ticker;
         if (t == null || state != PLAY) {
             Hub.chat("(not connected - message not sent)");
@@ -2032,6 +2244,17 @@ final class Bot {
                     inStrafe = 0;
                 }
             }
+            if (modControl) { // a mod walks the bot (ModNav holds the keys, a tick at a time)
+                if (!modHadControl) manualBeforeMod = manual;
+                manual = true;
+                modHadControl = true;
+                nav.drive(navBody);
+            } else if (modHadControl) {
+                modHadControl = false;
+                manual = manualBeforeMod || GameState.open; // back to you (driving in Play, or not at all)
+                inForward = inStrafe = 0;
+                inJump = inSprint = inSneak = false;
+            }
             if (manual) {
                 jumping = false;
                 ground = physicsStep();
@@ -2115,9 +2338,11 @@ final class Bot {
             sendMove(true, false, ground);
         }
         if (sneakTicks > 0 && --sneakTicks == 0 && !manual) setSneak(false);
+        modActions(); // what mods did this tick goes after the move, as a real client's clicks would
         // 1.21.2+ clients end every tick with this packet; anticheats use it to line up movement
         if (proto >= 768 && id(Proto.P_S_TICK_END) >= 0) send(new Buf(id(Proto.P_S_TICK_END)));
         if (detail) updateDetail();
+        ModEngine.tick();
         if (tick % 20 == 0) {
             ModEngine.emit("second", null);
             if (NonIntel.installed) NonIntel.second(World.snapshot(null));

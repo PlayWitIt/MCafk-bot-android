@@ -106,7 +106,11 @@ final class MapData {
         clear();
     }
 
+    /** The dimension the bot is in ("minecraft:overworld"...), or null. */
+    static volatile String dimension;
+
     static void setDimension(String name) {
+        dimension = name;
         nether = name != null && name.contains("nether");
         boolean end = name != null && name.contains("the_end");
         minY = nether || end ? 0 : -64;

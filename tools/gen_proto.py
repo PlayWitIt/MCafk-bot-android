@@ -234,6 +234,10 @@ for v,p in dp.items():
     for i in items: inames[i['id']]=i['displayName']
     iids=['']*(mx+1)
     for i in items: iids[i['id']]=i['name']
+    istack=[64]*(mx+1)
+    for i in items: istack[i['id']]=i.get('stackSize',64)
+    idura=[0]*(mx+1)
+    for i in items: idura[i['id']]=i.get('maxDurability',0) or 0
     blocks=sorted(json.load(open('data/'+p['blocks']+'/blocks.json')), key=lambda b:b['minStateId'])
     def shape_code(b):
         nm=b['name']; bb=b.get('boundingBox')
@@ -299,7 +303,7 @@ for v,p in dp.items():
                 if r: return r
         return None
     meta=_find_meta(pr) or {}
-    out_obj={'protocol':n,'packets':pk,'types':want,'items':inames,'itemIds':iids,'metaTypes':meta,
+    out_obj={'protocol':n,'packets':pk,'types':want,'items':inames,'itemIds':iids,'itemStack':istack,'itemDurability':idura,'metaTypes':meta,
              'blockMin':[b['minStateId'] for b in blocks],'blockNames':[b['displayName'] for b in blocks],
              'shapes':[shape_code(b) for b in blocks],
              'blockIds':[b['name'] for b in blocks],

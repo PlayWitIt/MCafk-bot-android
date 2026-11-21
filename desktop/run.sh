@@ -12,14 +12,14 @@ CP=$LIB/json.jar:$LIB/rhino.jar
 S=app/src/main/java/app/afkbot
 rm -rf $OUT && mkdir -p $OUT
 javac -nowarn -encoding UTF-8 --release 8 -cp $CP -d $OUT $(find desktop/stubs -name '*.java') \
-  $S/{Bot,Buf,Text,Proto,Hub,World,NonIntel,MapData,ModEngine,ProtoDef,Inv,Shapes,Auth,Slot,RemoteZip,TexturePack,GameState,GameLight,GameMesher,GameAssets,GameAtlas,GameModels,GameIcons,GameBiomes}.java desktop/src/app/afkbot/*.java 2>&1 \
+  $S/{Bot,Buf,Text,Proto,Hub,World,NonIntel,MapData,ModEngine,ModBridge,ModWorld,ModNav,GameRay,ProtoDef,Inv,Shapes,Auth,Slot,RemoteZip,TexturePack,GameState,GameLight,GameMesher,GameAssets,GameAtlas,GameModels,GameIcons,GameBiomes}.java desktop/src/app/afkbot/*.java 2>&1 \
   | grep -v "^Note:\|warning\|^[0-9]* warning" || true
 mode=${1:-live}; shift || true
 if [ "$mode" = gl ]; then
   # the Play renderer on real (Mesa) OpenGL ES: GLES20 calls go through Java's foreign function API (preview in 21)
   GOUT=desktop/build-gl; rm -rf $GOUT && mkdir -p $GOUT
   javac -nowarn -encoding UTF-8 --release 21 --enable-preview -cp $CP -d $GOUT $(find desktop/stubs desktop/glstubs -name '*.java') \
-    $S/{Bot,Buf,Text,Proto,Hub,World,NonIntel,MapData,ModEngine,ProtoDef,Inv,Shapes,Auth,Slot,RemoteZip,TexturePack,GameState,GameLight,GameMesher,GameAssets,GameAtlas,GameModels,GameIcons,GameRay,GameRenderer,GameAssetStore,GameHud,GameFont,EntityModels,Geo,ModStore,GameSky,GameBiomes,GameSkins}.java \
+    $S/{Bot,Buf,Text,Proto,Hub,World,NonIntel,MapData,ModEngine,ModBridge,ModWorld,ModNav,GameRay,ProtoDef,Inv,Shapes,Auth,Slot,RemoteZip,TexturePack,GameState,GameLight,GameMesher,GameAssets,GameAtlas,GameModels,GameIcons,GameRenderer,GameAssetStore,GameHud,GameFont,EntityModels,Geo,ModStore,GameSky,GameBiomes,GameSkins}.java \
     desktop/src/app/afkbot/*.java desktop/gltest/app/afkbot/*.java 2>&1 | grep -v "^Note:\|warning\|^[0-9]* warning" || true
   exec java --enable-preview --enable-native-access=ALL-UNNAMED -Xmx1500m -Dafk.density=1.83 -Dafk.cmd=desktop/realsrv/cmd -cp $GOUT:$CP app.afkbot.GlTest "$@"
 fi
@@ -27,6 +27,7 @@ case "$mode" in
   live) exec java -cp $OUT:$CP app.afkbot.LiveTest "$@" ;;
   real) exec java -Dafk.cmd=desktop/realsrv/cmd -cp $OUT:$CP app.afkbot.RealTest "$@" ;;
   non) exec java -cp $OUT:$CP app.afkbot.NonTest "$@" ;;
+  harvest) exec java -Dafk.cmd=desktop/realsrv/cmd -cp $OUT:$CP app.afkbot.HarvestTest "$@" ;;
   slot) exec java -Dafk.cmd=desktop/realsrv/cmd -cp $OUT:$CP app.afkbot.SlotTest "$@" ;;
   nonlive) exec java -cp $OUT:$CP app.afkbot.NonLive "$@" ;;
   preview) exec java -Xmx1500m -Dafk.cmd=desktop/realsrv/cmd -cp $OUT:$CP app.afkbot.PreviewTest "$@" ;;
