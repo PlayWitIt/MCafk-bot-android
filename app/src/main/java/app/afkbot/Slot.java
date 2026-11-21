@@ -45,6 +45,11 @@ final class Slot {
     private static String processName() {
         String forced = System.getProperty("afk.process"); // desktop tests run slot n as "app.afkbot:botn"
         if (forced != null) return forced;
+        try { // Android 9+: ask the system (by reflection, so desktop tests still compile and fall through)
+            Object n = Class.forName("android.app.Application").getMethod("getProcessName").invoke(null);
+            if (n instanceof String && !((String) n).isEmpty()) return (String) n;
+        } catch (Throwable ignored) {
+        }
         try {
             byte[] b = java.nio.file.Files.readAllBytes(new File("/proc/self/cmdline").toPath());
             int n = 0;

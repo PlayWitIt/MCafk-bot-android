@@ -78,7 +78,7 @@ public class MainActivity extends Activity implements Hub.Listener {
     // Account
     private TextView account, codeBox, codeBig, fullLog;
     private View codeView;
-    private Button signIn, signOut, openLink, copyCode, battery;
+    private Button signIn, signOut, openLink, copyCode, openBrowser, battery;
     private ScrollView logScroll;
     private String lastLog = "";
 
@@ -130,6 +130,12 @@ public class MainActivity extends Activity implements Hub.Listener {
     protected void onCreate(Bundle b) {
         setTheme(android.R.style.Theme_DeviceDefault_NoActionBar);
         super.onCreate(b);
+        if (Build.VERSION.SDK_INT >= 28 && Slot.current() > 0) { // each bot's sign-in page keeps its own (separate) web storage
+            try {
+                android.webkit.WebView.setDataDirectorySuffix("bot" + Slot.current());
+            } catch (Exception ignored) { // already set in this process
+            }
+        }
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(SURFACE);
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
@@ -2704,11 +2710,20 @@ public class MainActivity extends Activity implements Hub.Listener {
             }
         });
         LinearLayout codeRow = row(ac);
-        openLink = smallButton("Open microsoft.com/link", ACCENT);
+        openLink = smallButton("Sign in here", ACCENT);
         copyCode = smallButton("Copy code", SURFACE2);
         codeRow.addView(openLink, weight());
         codeRow.addView(copyCode, weight());
         openLink.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                openPrivateSignIn();
+            }
+        });
+        LinearLayout browserRow = row(ac);
+        openBrowser = smallButton("Use my browser instead", SURFACE2);
+        browserRow.addView(openBrowser, weight());
+        openBrowser.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 String code = Hub.authCode;
@@ -2846,6 +2861,10 @@ public class MainActivity extends Activity implements Hub.Listener {
     @Override
     public void onChange() {
         boolean running = Hub.running;
+        if (signInDialog != null && signInThread == null) { // signed in (or cancelled/failed): the page has done its job
+            if (Auth.signedInName(this) != null) toast("Signed in as " + Auth.signedInName(this));
+            closePrivateSignIn();
+        }
         publishSlot(this, false);
         refreshSlots();
         int sc = Hub.color == Hub.GREEN ? GOOD : Hub.color == Hub.RED ? BAD : Hub.color == Hub.YELLOW ? WARN : MUTED;
@@ -2928,9 +2947,12 @@ public class MainActivity extends Activity implements Hub.Listener {
         codeView.setVisibility(showCode ? View.VISIBLE : View.GONE);
         openLink.setVisibility(showCode ? View.VISIBLE : View.GONE);
         copyCode.setVisibility(showCode ? View.VISIBLE : View.GONE);
+        openBrowser.setVisibility(showCode ? View.VISIBLE : View.GONE);
         if (showCode) {
             codeBig.setText(code);
-            codeBox.setText("Tap the code to copy it\n\n1. Tap \"Open microsoft.com/link\" (the code is filled in for you)\n2. Sign in with the account that owns Minecraft\n3. Come back here - it finishes by itself");
+            codeBox.setText("Tap the code to copy it\n\n1. Tap \"Sign in here\": Microsoft's page opens fresh, not signed in, so you choose the account\n"
+                    + "2. Sign in with the account that owns Minecraft\n3. It finishes by itself\n\n"
+                    + "Your browser may sign in with the account it already uses; if you use it, pick \"Use another account\" there.");
         }
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
         battery.setVisibility(pm.isIgnoringBatteryOptimizations(getPackageName()) ? View.GONE : View.VISIBLE);
@@ -3009,6 +3031,94 @@ public class MainActivity extends Activity implements Hub.Listener {
 
     private static void haptic(View v) {
         if (v != null) v.performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY);
+    }
+
+    // ---------------------------------------------------------------- private sign-in page (choose any account)
+
+    private android.app.Dialog signInDialog;
+    private android.webkit.WebView signInWeb;
+
+    /** Forgets every web sign-in this bot's page has seen, so the next one starts at "choose an account". */
+    private static void forgetWebSignIns() {
+        try {
+            android.webkit.CookieManager.getInstance().removeAllCookies(null);
+            android.webkit.CookieManager.getInstance().flush();
+            android.webkit.WebStorage.getInstance().deleteAllData();
+        } catch (Exception ignored) {
+        }
+    }
+
+    /**
+     * Microsoft's device sign-in page (microsoft.com/link with the code filled in) in a page with no saved sign-ins,
+     * so it never reuses the account the phone's browser is signed into: you choose or type the account. Closes by
+     * itself when the sign-in finishes, and forgets the web session afterwards.
+     */
+    @android.annotation.SuppressLint("SetJavaScriptEnabled")
+    private void openPrivateSignIn() {
+        String code = Hub.authCode;
+        if (code == null) return;
+        closePrivateSignIn();
+        forgetWebSignIns();
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setBackgroundColor(BG);
+        LinearLayout bar = new LinearLayout(this);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setPadding(dp(16), dp(10), dp(8), dp(10));
+        bar.setBackgroundColor(SURFACE);
+        LinearLayout titles = new LinearLayout(this);
+        titles.setOrientation(LinearLayout.VERTICAL);
+        titles.addView(text("Microsoft sign-in" + (Slot.current() > 0 || Slot.exists(this, 1) || Slot.exists(this, 2) || Slot.exists(this, 3) ? " · Bot " + (Slot.current() + 1) : ""), 15, TEXT, true));
+        titles.addView(text("Code " + code + " · choose the account for this bot", 12, MUTED, false));
+        bar.addView(titles, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        Button close = smallButton("Close", SURFACE2);
+        bar.addView(close);
+        box.addView(bar);
+        final android.webkit.WebView web = new android.webkit.WebView(this);
+        android.webkit.WebSettings ws = web.getSettings();
+        ws.setJavaScriptEnabled(true); // Microsoft's sign-in needs it
+        ws.setDomStorageEnabled(true);
+        ws.setSaveFormData(false);
+        web.setWebViewClient(new android.webkit.WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(android.webkit.WebView v, android.webkit.WebResourceRequest r) {
+                String scheme = r.getUrl().getScheme();
+                return !"https".equals(scheme) && !"http".equals(scheme); // stay on the web; ignore app links
+            }
+        });
+        box.addView(web, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+        final android.app.Dialog d = new android.app.Dialog(this, android.R.style.Theme_DeviceDefault_NoActionBar);
+        d.setContentView(box);
+        d.setOnDismissListener(new android.content.DialogInterface.OnDismissListener() {
+            public void onDismiss(android.content.DialogInterface di) {
+                web.stopLoading();
+                web.destroy();
+                forgetWebSignIns(); // nothing of the Microsoft session stays in the app
+                if (signInDialog == d) {
+                    signInDialog = null;
+                    signInWeb = null;
+                }
+            }
+        });
+        close.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                d.dismiss();
+            }
+        });
+        signInDialog = d;
+        signInWeb = web;
+        d.show();
+        web.loadUrl("https://www.microsoft.com/link?otc=" + Uri.encode(code));
+    }
+
+    @Override
+    protected void onDestroy() {
+        closePrivateSignIn(); // e.g. switching to another bot mid sign-in
+        super.onDestroy();
+    }
+
+    private void closePrivateSignIn() {
+        if (signInDialog != null) signInDialog.dismiss();
     }
 
     private void startSignIn() {
