@@ -613,11 +613,21 @@ final class GameRenderer implements GLSurfaceView.Renderer, MapData.Changes {
     // ---- entities: Mojang's own models (EntityModels), lit by the light where they stand ----
 
     private static final String EVS =
-            "attribute vec3 aPos; attribute vec2 aUv; attribute float aShade;\n" +
+            "attribute vec3 aPos; attribute vec2 aUv; attribute float aShade; attribute float aLimb;\n" +
             "uniform mat4 uMvp; uniform vec3 uPos; uniform vec2 uRot; uniform vec2 uFogRange;\n" +
+            "uniform vec3 uPivot[4]; uniform float uSwing;\n" +
             "varying vec2 vUv; varying float vShade; varying float vFog;\n" +
             "void main() {\n" +
-            "  vec3 p = vec3(aPos.x * uRot.x - aPos.z * uRot.y, aPos.y, aPos.x * uRot.y + aPos.z * uRot.x) + uPos;\n" +
+            "  vec3 q = aPos;\n" +
+            "  if (aLimb > 0.5) {\n" + // walk: legs (and arms, opposite) swing around their pivot, like the game
+            "    int li = int(aLimb + 0.5) - 1;\n" +
+            "    vec3 pv = uPivot[0];\n" +
+            "    if (li == 1) pv = uPivot[1]; else if (li == 2) pv = uPivot[2]; else if (li == 3) pv = uPivot[3];\n" +
+            "    float a = (li == 0 || li == 3) ? uSwing : -uSwing;\n" +
+            "    vec3 d = q - pv;\n" +
+            "    q = pv + vec3(d.x, d.y * cos(a) - d.z * sin(a), d.y * sin(a) + d.z * cos(a));\n" +
+            "  }\n" +
+            "  vec3 p = vec3(q.x * uRot.x - q.z * uRot.y, q.y, q.x * uRot.y + q.z * uRot.x) + uPos;\n" +
             "  gl_Position = uMvp * vec4(p, 1.0);\n" +
             "  vUv = aUv; vShade = aShade;\n" +
             "  vFog = clamp((length(p) - uFogRange.x) / (uFogRange.y - uFogRange.x), 0.0, 1.0);\n" +
@@ -632,7 +642,9 @@ final class GameRenderer implements GLSurfaceView.Renderer, MapData.Changes {
             "  vec3 c = mix(t.rgb, uTint.rgb, uTint.a) * vShade * uLight;\n" +
             "  gl_FragColor = vec4(mix(c, uFog, vFog), 1.0);\n" +
             "}";
-    private int eProg, eaPos, eaUv, eaShade, euMvp, euPos, euRot, euFogRange, euTex, euLight, euFog, euTint;
+    private int eProg, eaPos, eaUv, eaShade, eaLimb, euMvp, euPos, euRot, euFogRange, euTex, euLight, euFog, euTint, euPivot, euSwing;
+    /** Walk animation state per entity id: {last x, last z, walk position, swing amount, last time ms}. */
+    private final Map<Integer, double[]> walk = new java.util.HashMap<Integer, double[]>();
     private final Map<EntityModels.Model, int[]> modelGl = new java.util.HashMap<EntityModels.Model, int[]>(); // {vbo, tex, vertices}
     /** Name tags for the HUD: {screen x, screen y, text}, updated every frame. */
     volatile List<Object[]> labels = new ArrayList<Object[]>();
@@ -643,6 +655,9 @@ final class GameRenderer implements GLSurfaceView.Renderer, MapData.Changes {
         eaPos = GLES20.glGetAttribLocation(eProg, "aPos");
         eaUv = GLES20.glGetAttribLocation(eProg, "aUv");
         eaShade = GLES20.glGetAttribLocation(eProg, "aShade");
+        eaLimb = GLES20.glGetAttribLocation(eProg, "aLimb");
+        euPivot = GLES20.glGetUniformLocation(eProg, "uPivot");
+        euSwing = GLES20.glGetUniformLocation(eProg, "uSwing");
         euMvp = GLES20.glGetUniformLocation(eProg, "uMvp");
         euPos = GLES20.glGetUniformLocation(eProg, "uPos");
         euRot = GLES20.glGetUniformLocation(eProg, "uRot");
@@ -679,7 +694,17 @@ final class GameRenderer implements GLSurfaceView.Renderer, MapData.Changes {
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
         GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, w, h, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, rgba);
-        g = new int[]{vbo, ids[0], m.mesh.length / Geo.STRIDE};
+        int limbVbo = 0;
+        if (m.limbs != null) {
+            int[] lb = new int[1];
+            GLES20.glGenBuffers(1, lb, 0);
+            FloatBuffer lf = ByteBuffer.allocateDirect(m.limbs.length * 4).order(ByteOrder.nativeOrder()).asFloatBuffer();
+            lf.put(m.limbs).position(0);
+            GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, lb[0]);
+            GLES20.glBufferData(GLES20.GL_ARRAY_BUFFER, m.limbs.length * 4, lf, GLES20.GL_STATIC_DRAW);
+            limbVbo = lb[0];
+        }
+        g = new int[]{vbo, ids[0], m.mesh.length / Geo.STRIDE, limbVbo};
         modelGl.put(m, g);
         return g;
     }
@@ -725,6 +750,31 @@ final class GameRenderer implements GLSurfaceView.Renderer, MapData.Changes {
             double a = Math.toRadians(d.yaw + 180);
             GLES20.glUniform2f(euRot, (float) Math.cos(a), (float) Math.sin(a));
             GLES20.glUniform3f(euPos, x, y, z);
+            // walk animation from how fast it actually moves (the game: limb swing grows with speed, up to 1)
+            float swing = 0;
+            if (g[3] != 0 && m.pivots != null) {
+                double wx = px + d.dx, wz = pz + d.dz;
+                long now = System.currentTimeMillis();
+                double[] st = walk.get(d.id);
+                if (st == null) walk.put(d.id, st = new double[]{wx, wz, 0, 0, now});
+                double dt = Math.max(1, now - st[4]) / 50.0; // in ticks
+                double moved = Math.hypot(wx - st[0], wz - st[1]);
+                double target = Math.min(1, moved / dt * 4);
+                st[3] += (target - st[3]) * Math.min(1, dt * 0.4);
+                st[2] += st[3] * dt;
+                st[0] = wx;
+                st[1] = wz;
+                st[4] = now;
+                swing = (float) (Math.cos(st[2] * 0.6662) * 1.4 * st[3]);
+                GLES20.glUniform3fv(euPivot, 4, m.pivots, 0);
+                GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, g[3]);
+                GLES20.glEnableVertexAttribArray(eaLimb);
+                GLES20.glVertexAttribPointer(eaLimb, 1, GLES20.GL_FLOAT, false, 4, 0);
+            } else {
+                GLES20.glDisableVertexAttribArray(eaLimb);
+                GLES20.glVertexAttrib4f(eaLimb, 0, 0, 0, 0);
+            }
+            GLES20.glUniform1f(euSwing, swing);
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, g[1]);
             GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, g[0]);
             GLES20.glVertexAttribPointer(eaPos, 3, GLES20.GL_FLOAT, false, Geo.STRIDE * 4, 0);
@@ -735,7 +785,9 @@ final class GameRenderer implements GLSurfaceView.Renderer, MapData.Changes {
         GLES20.glDisableVertexAttribArray(eaPos);
         GLES20.glDisableVertexAttribArray(eaUv);
         GLES20.glDisableVertexAttribArray(eaShade);
+        GLES20.glDisableVertexAttribArray(eaLimb);
         GLES20.glEnable(GLES20.GL_CULL_FACE);
+        if (walk.size() > 400) walk.clear(); // forget entities long gone
         labels = tags;
         List<World.Dot> items = new ArrayList<World.Dot>(), others = new ArrayList<World.Dot>();
         for (World.Dot d : boxes) (d.kind == 'i' ? items : others).add(d);

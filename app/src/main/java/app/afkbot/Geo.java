@@ -85,12 +85,42 @@ final class Geo {
 
     /** Builds triangles for a model. */
     static float[] mesh(int texW, int texH, JSONArray bones) throws org.json.JSONException {
+        return mesh(texW, texH, bones, null, null);
+    }
+
+    /** Limb slots for walk animation: 1 right leg / leg0, 2 left leg / leg1, 3 right arm / leg2, 4 left arm / leg3. */
+    static int limbSlot(String bone) {
+        String b = bone.toLowerCase(java.util.Locale.US);
+        if (b.equals("rightleg") || b.equals("leg0")) return 1;
+        if (b.equals("leftleg") || b.equals("leg1")) return 2;
+        if (b.equals("rightarm") || b.equals("leg2")) return 3;
+        if (b.equals("leftarm") || b.equals("leg3")) return 4;
+        return 0;
+    }
+
+    /**
+     * Same, and also: limbOut gets each vertex's limb slot (0 = not a limb; a bone counts as the limb of its nearest
+     * limb ancestor), pivotsOut (12 floats) the pivot of each limb slot 1..4 in the mesh's units (x flipped, /16).
+     */
+    static float[] mesh(int texW, int texH, JSONArray bones, List<Float> limbOut, float[] pivotsOut) throws org.json.JSONException {
         List<Float> out = new ArrayList<Float>();
         Map<String, JSONObject> byName = new HashMap<String, JSONObject>();
         for (int i = 0; i < bones.length(); i++) byName.put(bones.getJSONObject(i).optString("name"), bones.getJSONObject(i));
         for (int i = 0; i < bones.length(); i++) {
             JSONObject bone = bones.getJSONObject(i);
             if (bone.optBoolean("neverRender")) continue;
+            int limb = 0;
+            for (JSONObject b = bone; b != null && limb == 0; ) { // this bone or its nearest limb ancestor
+                limb = limbSlot(b.optString("name"));
+                if (limb > 0 && pivotsOut != null) {
+                    float[] pv = vec(b.optJSONArray("pivot"));
+                    pivotsOut[(limb - 1) * 3] = -pv[0] / 16f;
+                    pivotsOut[(limb - 1) * 3 + 1] = pv[1] / 16f;
+                    pivotsOut[(limb - 1) * 3 + 2] = pv[2] / 16f;
+                }
+                String parent = b.optString("parent", null);
+                b = parent == null ? null : byName.get(parent);
+            }
             JSONArray cubes = bone.optJSONArray("cubes");
             if (cubes == null) continue;
             boolean boneMirror = bone.optBoolean("mirror");
@@ -135,6 +165,7 @@ final class Geo {
                         out.add((r[0] + uu * r[2]) / texW);
                         out.add((r[1] + vv * r[3]) / texH);
                         out.add(SHADE[f]);
+                        if (limbOut != null) limbOut.add((float) limb);
                     }
                 }
             }

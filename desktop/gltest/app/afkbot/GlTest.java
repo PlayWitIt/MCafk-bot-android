@@ -46,6 +46,10 @@ public class GlTest {
         String[] mobs = {"zombie", "skeleton", "creeper", "cow", "pig", "sheep", "chicken", "villager", "iron_golem", "spider"};
         for (int i = 0; i < mobs.length; i++)
             PreviewTest.cmd("summon minecraft:" + mobs[i] + " " + (-4 + i * 1.6) + " -60 -9 {NoAI:1b,Rotation:[0f,0f],PersistenceRequired:1b}");
+        // a few that walk around, to see the walk animation
+        PreviewTest.cmd("summon minecraft:pig 6 -60 -6");
+        PreviewTest.cmd("summon minecraft:cow 0 -60 -6");
+        PreviewTest.cmd("summon minecraft:zombie 9 -60 -6 {Rotation:[180f,0f]}");
         EntityModels.init(new android.content.Context());
         PreviewTest.cmd("damage Tester 7");
         PreviewTest.cmd("xp set Tester 12 levels");

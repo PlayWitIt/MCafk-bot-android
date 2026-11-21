@@ -38,6 +38,8 @@ final class EntityModels {
     static final class Model {
         final float[] mesh; // Geo.STRIDE floats per vertex
         final Bitmap texture;
+        float[] limbs; // per vertex: limb slot 0..4 (walk animation, Play screen); null if unknown
+        float[] pivots; // pivots of limb slots 1..4 (x, y, z each)
         int glTex; // set by the renderer on the GL thread
 
         Model(float[] mesh, Bitmap texture) {
@@ -61,7 +63,7 @@ final class EntityModels {
         } catch (Exception e) {
             index = new JSONObject();
         }
-        cacheDir = new File(c.getFilesDir(), "entities-v1");
+        cacheDir = new File(c.getFilesDir(), "entities-v2"); // v2: also caches limb data for walk animation
         //noinspection ResultOfMethodCallIgnored
         cacheDir.mkdirs();
     }
@@ -93,12 +95,13 @@ final class EntityModels {
 
     private static Model load(String type) throws Exception {
         JSONObject e = index.getJSONObject(type);
-        File meshFile = new File(cacheDir, type + ".mesh"), texFile = new File(cacheDir, type + ".png");
-        float[] mesh = null;
+        File meshFile = new File(cacheDir, type + ".mesh"), texFile = new File(cacheDir, type + ".png"), limbFile = new File(cacheDir, type + ".limb");
+        float[] mesh = null, limbData = null;
         Bitmap tex = null;
         if (meshFile.exists() && texFile.exists()) {
             mesh = readMesh(meshFile);
             tex = BitmapFactory.decodeFile(texFile.getPath());
+            limbData = limbFile.exists() ? readMesh(limbFile) : null;
         }
         if (mesh == null || tex == null) {
             JSONObject geoFile = json(e.getString("file"));
@@ -107,7 +110,13 @@ final class EntityModels {
             Object[] g = Geo.find(geoFile, e.getString("geo"), others);
             if (g == null) g = Geo.find(mobs(), e.getString("geo"), others);
             if (g == null) throw new IOException("model " + e.getString("geo") + " not found");
-            mesh = Geo.mesh((Integer) g[0], (Integer) g[1], (org.json.JSONArray) g[2]);
+            java.util.List<Float> limbs = new java.util.ArrayList<Float>();
+            float[] pivots = new float[12];
+            mesh = Geo.mesh((Integer) g[0], (Integer) g[1], (org.json.JSONArray) g[2], limbs, pivots);
+            limbData = new float[12 + limbs.size()]; // pivots first, then one slot per vertex
+            System.arraycopy(pivots, 0, limbData, 0, 12);
+            for (int i = 0; i < limbs.size(); i++) limbData[12 + i] = limbs.get(i);
+            writeMesh(limbFile, limbData);
             byte[] img = fetch(e.getString("tex"));
             tex = e.getString("tex").endsWith(".tga") ? decodeTga(img) : BitmapFactory.decodeByteArray(img, 0, img.length);
             if (tex == null) throw new IOException("couldn't read texture");
@@ -119,7 +128,12 @@ final class EntityModels {
                 o.close();
             }
         }
-        return new Model(mesh, tex);
+        Model m = new Model(mesh, tex);
+        if (limbData != null && limbData.length == 12 + mesh.length / Geo.STRIDE) {
+            m.pivots = java.util.Arrays.copyOf(limbData, 12);
+            m.limbs = java.util.Arrays.copyOfRange(limbData, 12, limbData.length);
+        }
+        return m;
     }
 
     private static JSONObject mobs() throws Exception {

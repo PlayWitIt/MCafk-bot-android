@@ -79,6 +79,7 @@ public class GLES20 {
             VIEWPORT = h("glViewport", V_IIII), GET_ERROR = h("glGetError", FunctionDescriptor.of(JAVA_INT)),
             ATTRIB4F = h("glVertexAttrib4f", FunctionDescriptor.ofVoid(JAVA_INT, JAVA_FLOAT, JAVA_FLOAT, JAVA_FLOAT, JAVA_FLOAT)),
             TEX_SUB_IMAGE = h("glTexSubImage2D", FunctionDescriptor.ofVoid(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS)),
+            U3FV = h("glUniform3fv", FunctionDescriptor.ofVoid(JAVA_INT, JAVA_INT, ADDRESS)),
             READ_PIXELS = h("glReadPixels", FunctionDescriptor.ofVoid(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS));
 
     public static void glActiveTexture(int t) { try { ACTIVE_TEXTURE.invoke(t); } catch (Throwable e) { throw wrap(e); } }
@@ -200,6 +201,16 @@ public class GLES20 {
             MemorySegment arr = a.allocate(ADDRESS);
             arr.set(ADDRESS, 0, str);
             SHADER_SOURCE.invoke(s, 1, arr, MemorySegment.NULL);
+        } catch (Throwable e) {
+            throw wrap(e);
+        }
+    }
+
+    public static void glUniform3fv(int l, int count, float[] v, int off) {
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment s = a.allocateArray(JAVA_FLOAT, 3L * count);
+            for (int i = 0; i < 3 * count; i++) s.setAtIndex(JAVA_FLOAT, i, v[off + i]);
+            U3FV.invoke(l, count, s);
         } catch (Throwable e) {
             throw wrap(e);
         }
