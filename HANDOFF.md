@@ -2,22 +2,34 @@
 
 Read this first if you're picking this project up.
 
-## Why the PC
+## Status (2026-11-20, v7.7)
 
-The previous work happened in a cloud container that **cannot connect to constantiam.net** (only HTTPS goes out).
-Everything was tested against a local *vanilla* 1.21.11 server, where walking, sprinting, jumping, opening
-chests/copper chests/shulker boxes and taking items all work with 0 server corrections. On **Constantiam**
-(Folia 1.21.11 + its own anticheat) the user still reports:
+Constantiam runs Folia 1.21.11 with a strict, prediction-based anticheat. It pings the client every tick and replays
+every move against vanilla physics, so anything not bit-exact gets set back.
 
-1. **Can't walk** (again, in v7.3; v7.2 walked fine for a while).
-2. **Can't open a copper chest**, even with an empty hand. Scraping it with an axe worked (so "use item on block"
-   packets do reach the server).
-3. An earlier "Connection reset" right after trying to open a shulker box. v7.3 changed the click point.
-4. After reconnecting, the player was back exactly where they first joined. The server may be silently not
-   accepting movement, or it just didn't save on a reset.
+1. **Walking: fixed in v7.4** and verified live: walk, sprint, jump, step-ups and wall contact all had 0 corrections,
+   and the position is kept after a rejoin. Causes, all in `Bot.java`:
+   - The player box must be vanilla's float sizes: half width `0.6F/2` (0.30000001...) and height `1.8F`. With 0.3,
+     touching a wall leaves you 1.2e-8 inside it, which counts as moving into a block.
+   - Collision maths must be in double. `int + float` is float maths, which only has 0.25-block steps past
+     x/z = 2 million, and Constantiam bases are at about -2.7M.
+   - Physics runs every tick, also while idle, so onGround and velocity are right when you start walking.
+     Nothing is simulated before your chunk has loaded.
+   - Step-up works like vanilla: it uses onGround from before the move, tries candidate heights, and moves Y first,
+     then the larger horizontal axis last.
+   - Teleports apply the 1.21.2+ velocity and relative flags. Each tick sends keys, then sprint/sneak, then the move.
+2. **Copper chest / shulker opening: not re-tested on Constantiam.** It was probably the same root cause: the server
+   never accepted our movement, so it still thought the player was at the join spot, too far away to open anything.
+   That would also explain why a nearby axe scrape worked. It works on the local vanilla server (`copper`, `shulker`).
+   **The user's base is sensitive: on Constantiam only walk, jump and sprint unless the user explicitly allows more.**
+3. **Play mode (v7.6):** "AFK Bot Play" is a second app that runs the real Java Edition. It is built from Amethyst plus
+   `play/amethyst.patch` by `.github/workflows/play.yml`, and the AFK app hands its login to it. See
+   `play/README.md`. **It has not been tested on a phone yet.**
 
-On the PC you can run the **app's real bot code** against Constantiam with the user's account and iterate until
-it works. That's the whole point of `desktop/`.
+Commits are authored as "PlayWit Creations". Don't add tool attribution or co-author lines anywhere.
+
+On the PC you can run the **app's real bot code** against Constantiam with the user's account. That's what
+`desktop/` is for. The user must stop the AFK app on their phone first: one account can only be online once.
 
 ## Quick start on the PC
 
@@ -31,8 +43,9 @@ desktop/run.sh live                      # connects to constantiam.net with the 
 - The first run prints `Sign-in code: XXXXXXX`. **The user** enters it at https://www.microsoft.com/link.
   Tokens are saved in `desktop/state/` (git-ignored). **Never commit or print that folder.**
 - Then type commands (they're also readable from a file: `desktop/run.sh live < steps.txt`):
-  `where`, `walk`, `go <yaw> <ms> [jump]`, `containers`, `open <x> <y> <z>`, `take <slot>`, `close`,
-  `trace on`, `say <text>`, `wait <ms>`, `quit`. See `desktop/src/app/afkbot/LiveTest.java`.
+  `where`, `walk`, `go <yaw> <ms> [jump]`, `hold <keys> <ms> [yaw]` (keys: f b l r j s n), `containers`,
+  `open <x> <y> <z>`, `take <slot>`, `close`, `trace on` (prints every packet, each move with position and flags,
+  and each server teleport), `say <text>`, `wait <ms>`, `quit`. See `desktop/src/app/afkbot/LiveTest.java`.
 - Every `Server corrected your position ...` log line means the server rejected our movement and says which
   blocks were around. `trace on` prints every packet we send.
 - Don't spam the real server. Constantiam rate-limits joins and Mojang returns 429 on fast reconnects (the bot
@@ -42,7 +55,7 @@ Local vanilla server for regression tests (offline mode, port 25601):
 
 ```bash
 desktop/realserver.sh                                    # downloads Mojang's 1.21.11 server.jar on first run
-desktop/run.sh real walk        # also: course, physics, diag, copper, shulker (see RealTest.java)
+desktop/run.sh real walk        # also: far, course, physics, diag, copper, shulker (see RealTest.java)
 desktop/run.sh live 127.0.0.1:25601 --offline Tester     # interactive, against the local server
 ```
 

@@ -91,9 +91,12 @@ public class RealTest {
       int c1=Bot.corrections; double x0=World.selfX;
       say(b.testWalk()); Thread.sleep(3500);
       say(String.format("after test walk corrections=%d", Bot.corrections-c1));
-      c1=Bot.corrections; x0=World.selfX;
+      // the walk test ends a little west of the row, on the ground (the chests are 0.875 high: too tall to step
+      // onto), so put the player back on top of the first chest before walking along the row
+      cmd("tp Tester 8.5 -59.125 10.5 -90 0"); Thread.sleep(2000);
+      c1=Bot.corrections; x0=World.selfX; double cy0=World.selfY, cz0=World.selfZ;
       walk(b, -90, 5000, false);
-      say(String.format("chest row: x %.2f -> %.2f y=%.3f corrections=%d", x0, World.selfX, World.selfY, Bot.corrections-c1));
+      say(String.format("chest row: x %.2f -> %.2f, y %.3f -> %.3f, z %.2f -> %.2f corrections=%d", x0, World.selfX, cy0, World.selfY, cz0, World.selfZ, Bot.corrections-c1));
       cmd("fill 30 -60 9 36 -60 11 minecraft:air");
       cmd("setblock 31 -60 10 minecraft:anvil[facing=north]"); cmd("setblock 33 -60 10 minecraft:hopper"); cmd("setblock 35 -60 10 minecraft:cauldron");
       cmd("setblock 37 -60 10 minecraft:lectern"); cmd("setblock 39 -60 10 minecraft:composter");
