@@ -497,7 +497,7 @@ public class MainActivity extends Activity implements Hub.Listener {
         setupButton.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
                 selectTab(T_ACCOUNT);
-                if (signInThread == null && Auth.signedInName(MainActivity.this) == null) openMicrosoftLogin();
+                if (signInThread == null && Auth.signedInName(MainActivity.this) == null) showPasswordLogin();
             }
         });
 
@@ -2930,6 +2930,8 @@ public class MainActivity extends Activity implements Hub.Listener {
 
         LinearLayout ac = card(col);
         ac.addView(text("Microsoft account", 16, TEXT, true));
+        // which bot's sign-in this is (each bot keeps its own; shown so a mix-up would be plain to see)
+        ac.addView(text("Bot " + (Slot.current() + 1) + " · saved as " + Slot.prefs("auth") + " · " + Slot.processLabel(), 10, MUTED, false));
         account = text("", 14, TEXT, false);
         account.setPadding(0, dp(4), 0, 0);
         ac.addView(account);
@@ -2996,18 +2998,28 @@ public class MainActivity extends Activity implements Hub.Listener {
         accRow.addView(signIn, weight());
         accRow.addView(signOut, weight());
         LinearLayout codeRowAlt = row(ac);
-        useCode = smallButton("Use a code instead", SURFACE2);
+        useCode = smallButton("Other ways to sign in", SURFACE2);
         codeRowAlt.addView(useCode, weight());
         useCode.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
-                startSignIn(); // microsoft.com/link with a code (e.g. on another device)
+                new android.app.AlertDialog.Builder(MainActivity.this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                        .setTitle("Other ways to sign in")
+                        .setItems(new String[]{"Microsoft's sign-in page (in the app)", "A code for microsoft.com/link (any device)"},
+                                new android.content.DialogInterface.OnClickListener() {
+                                    public void onClick(android.content.DialogInterface d, int which) {
+                                        if (which == 0) openMicrosoftLogin();
+                                        else startSignIn();
+                                    }
+                                })
+                        .setNegativeButton("Cancel", null)
+                        .show();
             }
         });
         signIn.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 if (signInThread != null) cancelSignIn = true;
-                else openMicrosoftLogin();
+                else showPasswordLogin();
             }
         });
         signOut.setOnClickListener(new View.OnClickListener() {
@@ -3136,7 +3148,7 @@ public class MainActivity extends Activity implements Hub.Listener {
             boolean needSignIn = !cfg.offline && name == null;
             setupCard.setVisibility(needSignIn && !running ? View.VISIBLE : View.GONE);
             if (needSignIn) setupText.setText(signInThread != null ? "Signing in... (see the Account tab)" :
-                    "Sign in with the Microsoft account that owns Minecraft: Microsoft's own sign-in page opens, where you choose the account or type its email and password.");
+                    "Sign in with the Microsoft account that owns Minecraft: type its email and password (they go straight to Microsoft).");
             if (needSignIn) setupButton.setText(signInThread != null ? "Show my code" : "Sign in with Microsoft");
             startStop.setBackground(running ? round(0xFF3A1D24, dp(14), BAD) : gradient(ACCENT, ACCENT2, dp(14)));
             boolean live = running && World.inWorld;
@@ -3318,6 +3330,85 @@ public class MainActivity extends Activity implements Hub.Listener {
         String code = Hub.authCode;
         if (code == null) return;
         openWebPage("https://www.microsoft.com/link?otc=" + Uri.encode(code), "Code " + code + " · choose the account for this bot", true);
+    }
+
+    /**
+     * Sign in with the account's email and password, typed here: they go straight to Microsoft's sign-in (HTTPS),
+     * so it's exactly that account. The password isn't kept anywhere.
+     */
+    private void showPasswordLogin() {
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setPadding(dp(20), dp(8), dp(20), dp(4));
+        TextView intro = text("The Microsoft account that owns Minecraft" + (Slot.current() > 0 ? ", for Bot " + (Slot.current() + 1) : "") + ".", 13, MUTED, false);
+        col.addView(intro);
+        final EditText email = edit("Email, phone or Skype", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
+        final EditText pass = edit("Password", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(12);
+        col.addView(email, lp);
+        LinearLayout.LayoutParams lp2 = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp2.topMargin = dp(10);
+        col.addView(pass, lp2);
+        final android.widget.CheckBox show = new android.widget.CheckBox(this);
+        show.setText("Show password");
+        show.setTextColor(MUTED);
+        show.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
+            public void onCheckedChanged(android.widget.CompoundButton b, boolean on) {
+                pass.setInputType(InputType.TYPE_CLASS_TEXT | (on ? InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD : InputType.TYPE_TEXT_VARIATION_PASSWORD));
+                pass.setSelection(pass.getText().length());
+            }
+        });
+        col.addView(show);
+        col.addView(text("Sent only to Microsoft (login.live.com), never kept. Accounts with two-step verification: use Other ways to sign in.", 11, MUTED, false));
+        final android.app.AlertDialog d = new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle("Sign in with Microsoft")
+                .setView(col)
+                .setPositiveButton("Sign in", null)
+                .setNegativeButton("Cancel", null)
+                .create();
+        d.setOnShowListener(new android.content.DialogInterface.OnShowListener() {
+            public void onShow(android.content.DialogInterface di) {
+                d.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener(new View.OnClickListener() {
+                    public void onClick(View v) {
+                        final String e = email.getText().toString().trim(), p = pass.getText().toString();
+                        if (e.isEmpty() || p.isEmpty()) {
+                            toast("Enter the email and the password");
+                            return;
+                        }
+                        d.dismiss();
+                        passwordSignIn(e, p);
+                    }
+                });
+            }
+        });
+        d.show();
+        email.requestFocus();
+    }
+
+    private void passwordSignIn(final String email, final String password) {
+        cancelSignIn = false;
+        Hub.authError = null;
+        selectTab(T_ACCOUNT);
+        final android.content.Context ctx = getApplicationContext();
+        Thread t = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Auth.signInWithPassword(ctx, email, password);
+                } catch (Exception e) {
+                    String m = e.getMessage() != null ? e.getMessage() : e.toString();
+                    Hub.authError = m;
+                    Hub.log("Sign-in failed: " + m);
+                } finally {
+                    signInThread = null;
+                    Hub.fire();
+                }
+            }
+        }, "sign-in");
+        signInThread = t;
+        t.start();
+        onChange();
     }
 
     /** The page is for the code sign-in (closes when that finishes), not the full one (closes on its redirect). */

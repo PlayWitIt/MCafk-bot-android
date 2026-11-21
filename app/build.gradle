@@ -10,8 +10,8 @@ android {
         applicationId "app.afkbot"
         minSdk 26
         targetSdk 35
-        versionCode 39
-        versionName "7.15"
+        versionCode 40
+        versionName "7.16"
     }
 
     signingConfigs {

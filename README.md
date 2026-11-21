@@ -37,9 +37,9 @@ Get **AFKBot.apk** from the [latest release](../../releases/tag/latest) and open
   each with its own notification. The bar under the title shows every bot with a live status dot; tap one to see its Home, Map, 3D,
   Chat and Play screens. "+ Add bot" adds one (it opens on its Account tab); remove an added bot from its Account tab.
   The same account can't run in two bots at once (the server would kick one).
-- **Microsoft sign-in on Microsoft's own page**: choose the account, or type its email and password. It opens inside
-  the app with nothing saved, so it never picks an account by itself (each bot keeps its own sign-in). Prefer a code?
-  "Use a code instead" gives one for microsoft.com/link on any device.
+- **Microsoft sign-in with your email and password**, typed in the app and sent straight to Microsoft (never kept),
+  so it's exactly the account you typed. Each bot keeps its own sign-in. Two-step verification accounts: "Other ways
+  to sign in" (Microsoft's page in the app, or a code for microsoft.com/link).
 - Supports Minecraft 1.12.2 and 1.20.2 - 26.1 (auto-detects the server version)
 - Runs as a foreground service so it keeps going with the screen off
 

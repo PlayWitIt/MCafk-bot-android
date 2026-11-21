@@ -60,6 +60,12 @@ final class Slot {
         }
     }
 
+    /** This process's name, for showing which bot's storage is in use. */
+    static String processLabel() {
+        String p = processName();
+        return p == null ? "?" : p;
+    }
+
     /** Names of per-slot preference files: slot 0 keeps the original names, so existing sign-ins and settings stay. */
     static String prefs(String base) {
         int s = current();
