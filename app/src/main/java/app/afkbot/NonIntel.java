@@ -682,7 +682,7 @@ final class NonIntel {
 
     /** A server reply that a whisper didn't go through ("Player not found"): marks the line just sent. */
     private static boolean notSent(String line) {
-        if (!Pattern.compile("(?i)(no player (was )?found|player not found|not online|isn'?t online|is offline|could not find|couldn'?t find|unknown player|"
+        if (!Pattern.compile("(?i)(argument\\.entity\\.(notfound|invalid)|argument\\.player\\.unknown|no player (was )?found|player not found|not online|isn'?t online|is offline|could not find|couldn'?t find|unknown player|"
                 + "can'?t (message|whisper)|cannot (message|whisper)|is ignoring you|doesn'?t accept|not accepting)").matcher(line).find()) return false;
         long now = System.currentTimeMillis();
         Line newest = null;

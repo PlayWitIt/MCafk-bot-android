@@ -1055,6 +1055,8 @@ final class Bot {
             for (int i = 0; i < n; i++) World.removeName(p.uuid());
         } else if (pid == id(Proto.P_C_PLAYER_CHAT)) {
             readPlayerChat(p);
+        } else if (pid == id(Proto.P_C_PROFILELESS_CHAT)) {
+            readProfilelessChat(p);
         } else if (pid == id(Proto.P_C_BLOCK_CHANGE)) {
             long v = p.i64();
             int bx = (int) (v >> 38), by = (int) (v << 52 >> 52), bz = (int) (v << 26 >> 38);
@@ -1794,6 +1796,31 @@ final class Bot {
         }
         Hub.chat((name != null ? "<" + name + "> " : "<?> ") + msg);
         emitChat(name, msg, (name != null ? "<" + name + "> " : "") + msg, false);
+    }
+
+    /**
+     * Chat that isn't signed (a server's /say, or a whisper whose text wasn't signed, as on servers without secure
+     * chat): the text, its kind, who it's from and (for whispers you sent) who to.
+     */
+    private void readProfilelessChat(Buf.In p) throws IOException {
+        String msg = Text.strip(proto >= 765 ? Text.fromNbt(p) : Text.fromJson(p.str())).trim();
+        int kind = p.varInt();
+        // Before 1.20.5 the kind is the registry id itself; after, it's the id plus one (0 would be a kind spelled out).
+        if (proto < 766) kind++;
+        String name = null, target = null;
+        if (kind != 0) {
+            name = Text.strip(proto >= 765 ? Text.fromNbt(p) : Text.fromJson(p.str())).trim();
+            if (p.bool()) target = Text.strip(proto >= 765 ? Text.fromNbt(p) : Text.fromJson(p.str())).trim();
+        }
+        String line;
+        if (kind == 3 && name != null && !name.isEmpty() && target == null) line = name + " whispers to you: " + msg;
+        else if (kind == 4 && target != null && !target.isEmpty()) line = "You whisper to " + target + ": " + msg;
+        else if (kind == 1 && name != null && !name.isEmpty()) line = "<" + name + "> " + msg;
+        else line = (name != null && !name.isEmpty() ? "[" + name + "] " : "") + msg;
+        if (line.length() > 400) line = line.substring(0, 400) + "...";
+        Hub.chat(line);
+        if (kind == 1 && name != null && !name.isEmpty()) emitChat(name, msg, line, false);
+        else emitChat(null, line, line, true);
     }
 
     private void updateNearest() {
@@ -2627,7 +2654,7 @@ final class Bot {
                 Proto.P_C_START_CONFIG, Proto.P_C_HEALTH, Proto.P_C_SYSTEM_CHAT, Proto.P_C_RESOURCE_PACK, Proto.P_C_COOKIE_REQ,
                 Proto.P_C_SPAWN_ENTITY, Proto.P_C_SPAWN_PLAYER, Proto.P_C_SPAWN_LIVING, Proto.P_C_ENTITY_DESTROY,
                 Proto.P_C_REL_MOVE, Proto.P_C_MOVE_LOOK, Proto.P_C_ENTITY_TELEPORT, Proto.P_C_ENTITY_SYNC, Proto.P_C_RESPAWN,
-                Proto.P_C_PLAYER_INFO, Proto.P_C_PLAYER_REMOVE, Proto.P_C_PLAYER_CHAT};
+                Proto.P_C_PLAYER_INFO, Proto.P_C_PLAYER_REMOVE, Proto.P_C_PLAYER_CHAT, Proto.P_C_PROFILELESS_CHAT};
         for (int k : want) if (ids[k] == pid) return true;
         if (MapData.supported && (pid == id(Proto.P_C_MAP_CHUNK) || pid == id(Proto.P_C_UNLOAD_CHUNK))) return true;
         // only decoded while the Play screen is open (keeps the AFK bot as light as before)
