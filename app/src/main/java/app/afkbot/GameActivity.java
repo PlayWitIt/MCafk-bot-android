@@ -225,4 +225,16 @@ public class GameActivity extends Activity implements GameHud.Host {
             }
         }
     }
+
+    /** The Play screen of bot slot 1 (runs in its own process, ":bot1"; see Slot). */
+    public static final class Bot1 extends GameActivity {
+    }
+
+    /** The Play screen of bot slot 2 (runs in its own process, ":bot2"; see Slot). */
+    public static final class Bot2 extends GameActivity {
+    }
+
+    /** The Play screen of bot slot 3 (runs in its own process, ":bot3"; see Slot). */
+    public static final class Bot3 extends GameActivity {
+    }
 }

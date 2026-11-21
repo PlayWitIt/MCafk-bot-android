@@ -104,6 +104,7 @@ desktop/run.sh live 127.0.0.1:25601 --offline Tester     # interactive, against 
 | `MainActivity.java` | All the UI (tabs Home/Map/3D/Modules/Chat/Account). |
 | `ModEngine.java`, `ModStore.java` | Sandboxed JavaScript mods (Rhino). |
 | `AfkService.java`, `Hub.java` | Foreground service, shared state and log. |
+| `Slot.java` | **Several bots at once.** Each bot slot runs in its own Android process (slot 0 = main process, slot n = `:botn`, declared in the manifest as `MainActivity$Botn`, `GameActivity$Botn`, `AfkService$Botn`), so all the static state (Hub, World, MapData, Inv, GameState...) is per bot for free. Per-slot prefs (`settings_botn`, `auth_botn`, `mods_botn`) and `files/non_botn`; slot 0 keeps the old names. Status crosses slots through `files/slots/n.status` (heartbeat every 15 s). Shared caches are written with `Slot.write` (temp file + rename). Test: `desktop/run.sh slot` (two processes, two bots on the local server, 11 checks). |
 
 Facts worth knowing:
 - Protocol 774 = 1.21.11. Constantiam's status reply gives protocol -1, so the version is parsed from its name.

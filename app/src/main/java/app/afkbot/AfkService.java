@@ -16,7 +16,7 @@ public class AfkService extends Service {
     static final String ACTION_START = "app.afkbot.START";
     static final String ACTION_STOP = "app.afkbot.STOP";
     private static final String CHANNEL = "afk";
-    private static final int NOTIF_ID = 1;
+    private final int NOTIF_ID = 1 + Slot.current(); // one ongoing notification per bot slot
 
     private Bot bot;
     private PowerManager.WakeLock wake;
@@ -77,12 +77,13 @@ public class AfkService extends Service {
                 }
             };
             Hub.addListener(listener);
+            beat.post(heartbeat);
         }
         return START_NOT_STICKY;
     }
 
     private static final String ALERT_CHANNEL = "alerts";
-    private int alertId = 100;
+    private int alertId = 100 + Slot.current() * 1000; // bot slots never replace each other's alerts
     private String lastAlert = "";
     private long lastAlertAt = 0;
 
@@ -103,7 +104,7 @@ public class AfkService extends Service {
                     ch.enableVibration(true);
                     nm.createNotificationChannel(ch);
                 }
-                Intent open = new Intent(AfkService.this, MainActivity.class);
+                Intent open = new Intent(AfkService.this, Slot.mainActivity(Slot.current()));
                 open.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
                 PendingIntent pi = PendingIntent.getActivity(AfkService.this, 2, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
                 Notification n = new Notification.Builder(AfkService.this, ALERT_CHANNEL)
@@ -133,9 +134,11 @@ public class AfkService extends Service {
             listener = null;
         }
         releaseLocks();
+        beat.removeCallbacks(heartbeat);
         Hub.running = false;
         Hub.status("Stopped", Hub.GREY);
         Hub.detail("");
+        MainActivity.publishSlot(this, true);
         stopForeground(true);
         stopSelf();
     }
@@ -167,7 +170,16 @@ public class AfkService extends Service {
         wifi = null;
     }
 
+    private final android.os.Handler beat = new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable heartbeat = new Runnable() {
+        public void run() {
+            MainActivity.publishSlot(AfkService.this, true);
+            beat.postDelayed(this, Slot.HEARTBEAT_MS);
+        }
+    };
+
     private void updateNotification() {
+        MainActivity.publishSlot(this, false); // the other bot slots' switchers show this
         String text = Hub.status;
         if (text.equals(lastNotif) || bot == null) return;
         lastNotif = text;
@@ -181,6 +193,12 @@ public class AfkService extends Service {
         return id != 0 ? id : android.R.drawable.ic_media_play;
     }
 
+    /** "AFK Bot", plus the account name so several running bots can be told apart. */
+    private String title() {
+        String name = Settings.accountName(this);
+        return name.isEmpty() ? "AFK Bot" : "AFK Bot · " + name;
+    }
+
     private Notification buildNotification(String text) {
         NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         if (nm.getNotificationChannel(CHANNEL) == null) {
@@ -188,20 +206,32 @@ public class AfkService extends Service {
             ch.setDescription("Shows that the AFK bot is connected");
             nm.createNotificationChannel(ch);
         }
-        Intent open = new Intent(this, MainActivity.class);
+        Intent open = new Intent(this, Slot.mainActivity(Slot.current()));
         open.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         PendingIntent openPi = PendingIntent.getActivity(this, 0, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-        Intent stop = new Intent(this, AfkService.class).setAction(ACTION_STOP);
+        Intent stop = new Intent(this, Slot.service()).setAction(ACTION_STOP);
         PendingIntent stopPi = PendingIntent.getService(this, 1, stop, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         return new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(statIcon())
                 .setColor(MainActivity.ACCENT)
-                .setContentTitle("AFK Bot")
+                .setContentTitle(title())
                 .setContentText(text)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
                 .setContentIntent(openPi)
                 .addAction(new Notification.Action.Builder(null, "Stop", stopPi).build())
                 .build();
+    }
+
+    /** The bot service of bot slot 1 (runs in its own process, ":bot1"; see Slot). */
+    public static final class Bot1 extends AfkService {
+    }
+
+    /** The bot service of bot slot 2 (runs in its own process, ":bot2"; see Slot). */
+    public static final class Bot2 extends AfkService {
+    }
+
+    /** The bot service of bot slot 3 (runs in its own process, ":bot3"; see Slot). */
+    public static final class Bot3 extends AfkService {
     }
 }

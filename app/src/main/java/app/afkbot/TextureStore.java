@@ -125,18 +125,10 @@ final class TextureStore {
             //noinspection ResultOfMethodCallIgnored
             d.mkdirs();
             Bitmap atlas = Bitmap.createBitmap(r.atlas, TexturePack.SIZE, TexturePack.SIZE, Bitmap.Config.ARGB_8888);
-            FileOutputStream o = new FileOutputStream(new File(d, "atlas.png"));
-            try {
-                atlas.compress(Bitmap.CompressFormat.PNG, 100, o);
-            } finally {
-                o.close();
-            }
-            FileOutputStream m = new FileOutputStream(new File(d, "map.json"));
-            try {
-                m.write(TexturePack.mapJson(r).getBytes(StandardCharsets.UTF_8));
-            } finally {
-                m.close();
-            }
+            java.io.ByteArrayOutputStream png = new java.io.ByteArrayOutputStream();
+            atlas.compress(Bitmap.CompressFormat.PNG, 100, png);
+            Slot.write(new File(d, "atlas.png"), png.toByteArray()); // all at once: other bot slots share this cache
+            Slot.write(new File(d, "map.json"), TexturePack.mapJson(r));
             current = new Loaded(atlas, new TexturePack.Map3D(TexturePack.mapJson(r)), version);
             status = "Textures ready (" + r.tiles + " textures)";
         } catch (org.json.JSONException e) {

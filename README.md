@@ -33,6 +33,10 @@ Get **AFKBot.apk** from the [latest release](../../releases/tag/latest) and open
   **Import** your lists, groups and notes from the PC mod with a share link (`NN2:…`) or code (`NN1:…`). Kept per server, on the phone only.
   On servers that enforce secure chat it won't send whispers (an unsigned `/w` would get you kicked there); reading still works.
 - **Alerts**: phone notifications for kicks, disconnects, deaths, players nearby and safety logouts
+- **Several bots at once**: up to 4 bots, each with its own Microsoft (or offline) account and settings, all able to run at the same time,
+  each with its own notification. The bar under the title shows every bot with a live status dot; tap one to see its Home, Map, 3D,
+  Chat and Play screens. "+ Add bot" adds one (it opens on its Account tab); remove an added bot from its Account tab.
+  The same account can't run in two bots at once (the server would kick one).
 - Microsoft sign-in with a short code at microsoft.com/link (remembers you)
 - Supports Minecraft 1.12.2 and 1.20.2 - 26.1 (auto-detects the server version)
 - Runs as a foreground service so it keeps going with the screen off

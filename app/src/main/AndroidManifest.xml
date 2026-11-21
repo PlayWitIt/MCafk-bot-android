@@ -45,5 +45,83 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Keeps a Minecraft server connection alive while the phone is locked" />
         </service>
+
+        <!-- bot slot 1: its own process, so it keeps its own world, map, chat and log (see Slot.java) -->
+        <activity
+            android:name=".MainActivity$Bot1"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|uiMode|smallestScreenSize"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:process=":bot1"
+            android:windowSoftInputMode="adjustResize" />
+        <activity
+            android:name=".GameActivity$Bot1"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|uiMode|smallestScreenSize|navigation"
+            android:exported="false"
+            android:process=":bot1"
+            android:screenOrientation="sensorLandscape"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
+            android:windowSoftInputMode="adjustNothing" />
+        <service
+            android:name=".AfkService$Bot1"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:process=":bot1">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps a Minecraft server connection alive while the phone is locked" />
+        </service>
+
+        <!-- bot slot 2: its own process, so it keeps its own world, map, chat and log (see Slot.java) -->
+        <activity
+            android:name=".MainActivity$Bot2"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|uiMode|smallestScreenSize"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:process=":bot2"
+            android:windowSoftInputMode="adjustResize" />
+        <activity
+            android:name=".GameActivity$Bot2"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|uiMode|smallestScreenSize|navigation"
+            android:exported="false"
+            android:process=":bot2"
+            android:screenOrientation="sensorLandscape"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
+            android:windowSoftInputMode="adjustNothing" />
+        <service
+            android:name=".AfkService$Bot2"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:process=":bot2">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps a Minecraft server connection alive while the phone is locked" />
+        </service>
+
+        <!-- bot slot 3: its own process, so it keeps its own world, map, chat and log (see Slot.java) -->
+        <activity
+            android:name=".MainActivity$Bot3"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|uiMode|smallestScreenSize"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:process=":bot3"
+            android:windowSoftInputMode="adjustResize" />
+        <activity
+            android:name=".GameActivity$Bot3"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|uiMode|smallestScreenSize|navigation"
+            android:exported="false"
+            android:process=":bot3"
+            android:screenOrientation="sensorLandscape"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
+            android:windowSoftInputMode="adjustNothing" />
+        <service
+            android:name=".AfkService$Bot3"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:process=":bot3">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps a Minecraft server connection alive while the phone is locked" />
+        </service>
     </application>
 </manifest>

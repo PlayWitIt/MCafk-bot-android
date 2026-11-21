@@ -137,6 +137,13 @@ public class MainActivity extends Activity implements Hub.Listener {
         ModStore.init(this);
         buildUi();
         if (b != null) tab = b.getInt("tab", 0);
+        else if (getIntent() != null && getIntent().hasExtra("tab")) tab = getIntent().getIntExtra("tab", 0); // from the bot switcher
+        if (tab == T_NON && !NonIntel.installed) tab = T_HOME;
+        String carry = getIntent() == null ? null : getIntent().getStringExtra("address");
+        if (carry != null && !app.afkbot.Settings.prefs(this).contains("address")) { // a new bot: same server as the one it was added from
+            cfg.address = carry;
+            save();
+        }
         selectTab(tab);
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1);
@@ -157,6 +164,7 @@ public class MainActivity extends Activity implements Hub.Listener {
         onChange();
         update3dLifecycle();
         ui.post(radarTick);
+        ui.post(slotTick);
     }
 
     @Override
@@ -164,6 +172,7 @@ public class MainActivity extends Activity implements Hub.Listener {
         super.onPause();
         resumed = false;
         ui.removeCallbacks(radarTick);
+        ui.removeCallbacks(slotTick);
         Hub.removeListener(this);
         update3dLifecycle();
         save();
@@ -207,6 +216,7 @@ public class MainActivity extends Activity implements Hub.Listener {
         });
         header.addView(statusDot);
         root.addView(header);
+        root.addView(buildSlotBar());
 
         pages = new FrameLayout(this);
         root.addView(pages, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
@@ -315,6 +325,147 @@ public class MainActivity extends Activity implements Hub.Listener {
             ui.removeCallbacks(radarTick);
             ui.post(radarTick);
         }
+    }
+
+    // ---------------------------------------------------------------- bot slots (several bots at once; see Slot)
+
+    private LinearLayout slotBar;
+    private String slotKey = "";
+    private final Slot.Status[] others = new Slot.Status[Slot.MAX];
+    private final long[] othersAt = new long[Slot.MAX];
+    private final Runnable slotTick = new Runnable() {
+        public void run() {
+            refreshSlots(); // the other bots' status comes from files their processes write
+            ui.postDelayed(this, 1500);
+        }
+    };
+
+    /** Writes this slot's status where the other slots' switchers read it. */
+    static void publishSlot(android.content.Context c, boolean force) {
+        Slot.publish(c, app.afkbot.Settings.accountName(c), Hub.status, Hub.color, Hub.running, force);
+    }
+
+    private View buildSlotBar() {
+        android.widget.HorizontalScrollView sv = new android.widget.HorizontalScrollView(this);
+        sv.setHorizontalScrollBarEnabled(false);
+        slotBar = new LinearLayout(this);
+        slotBar.setOrientation(LinearLayout.HORIZONTAL);
+        slotBar.setPadding(dp(14), 0, dp(14), dp(8));
+        sv.addView(slotBar);
+        return sv;
+    }
+
+    /** The chips: one per bot (name and live status dot), the current one highlighted, then "Add bot". */
+    private void refreshSlots() {
+        if (slotBar == null) return;
+        int me = Slot.current();
+        StringBuilder key = new StringBuilder();
+        List<Object[]> rows = new java.util.ArrayList<Object[]>();
+        for (int s = 0; s < Slot.MAX; s++) {
+            if (!Slot.exists(this, s)) continue;
+            String name;
+            int color;
+            boolean running;
+            if (s == me) {
+                name = app.afkbot.Settings.accountName(this);
+                color = Hub.color;
+                running = Hub.running;
+            } else {
+                long now = System.currentTimeMillis();
+                if (others[s] == null || now - othersAt[s] > 1000) { // onChange runs per log line: re-read at most once a second
+                    others[s] = Slot.read(this, s);
+                    othersAt[s] = now;
+                }
+                Slot.Status st = others[s];
+                boolean dead = st.stale();
+                name = st.name;
+                color = dead ? Hub.GREY : st.color;
+                running = st.running && !dead;
+            }
+            int dot = color == Hub.GREEN ? GOOD : color == Hub.YELLOW ? WARN : color == Hub.RED ? BAD : running ? WARN : MUTED;
+            String label = name.isEmpty() ? "Bot " + (s + 1) : name;
+            rows.add(new Object[]{s, label, dot});
+            key.append(s).append(label).append(dot).append(';');
+        }
+        if (key.toString().equals(slotKey)) return; // nothing changed: keep the views
+        slotKey = key.toString();
+        slotBar.removeAllViews();
+        for (Object[] r : rows) {
+            final int s = (Integer) r[0];
+            int dot = (Integer) r[2];
+            android.text.SpannableString t = new android.text.SpannableString("\u25CF  " + r[1]);
+            t.setSpan(new android.text.style.ForegroundColorSpan(dot), 0, 1, 0);
+            TextView chip = text("", 13, s == me ? TEXT : MUTED, s == me);
+            chip.setText(t);
+            chip.setSingleLine(true);
+            chip.setPadding(dp(12), dp(7), dp(14), dp(7));
+            chip.setBackground(s == me ? round((ACCENT & 0x00FFFFFF) | 0x33000000, dp(20), ACCENT) : round(SURFACE2, dp(20), STROKE));
+            chip.setContentDescription("Bot " + (s + 1) + ": " + r[1] + (s == me ? ", shown now" : ", tap to show"));
+            if (s != me) chip.setOnClickListener(new View.OnClickListener() {
+                public void onClick(View v) {
+                    switchTo(s, tab, null);
+                }
+            });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.rightMargin = dp(8);
+            slotBar.addView(chip, lp);
+        }
+        if (rows.size() < Slot.MAX) {
+            TextView add = text("+  Add bot", 13, MUTED, false);
+            add.setPadding(dp(12), dp(7), dp(14), dp(7));
+            add.setBackground(round(BG, dp(20), STROKE));
+            add.setContentDescription("Add another bot with its own account");
+            add.setOnClickListener(new View.OnClickListener() {
+                public void onClick(View v) {
+                    int s = Slot.add(MainActivity.this);
+                    if (s < 0) {
+                        toast("Up to " + Slot.MAX + " bots");
+                        return;
+                    }
+                    switchTo(s, T_ACCOUNT, cfg.address); // a new bot starts on its Account tab, same server
+                }
+            });
+            slotBar.addView(add);
+        }
+        ripple(slotBar);
+    }
+
+    /** Shows another bot's screens (they live in that bot's own process). */
+    private void switchTo(int slot, int toTab, String address) {
+        save();
+        Intent i = new Intent(this, Slot.mainActivity(slot));
+        i.putExtra("tab", toTab);
+        if (address != null) i.putExtra("address", address);
+        startActivity(i);
+        overridePendingTransition(0, 0);
+        finish();
+        overridePendingTransition(0, 0);
+    }
+
+    /** Removes this bot (not Bot 1): signs it out, clears its settings and shows Bot 1. */
+    private void removeThisBot() {
+        if (Hub.running) {
+            toast("Stop this bot first");
+            return;
+        }
+        confirm("Remove Bot " + (Slot.current() + 1) + "?", "Its sign-in and settings are deleted from this phone. Your other bots aren't affected.", "Remove", new Runnable() {
+            public void run() {
+                Auth.signOut(MainActivity.this);
+                app.afkbot.Settings.prefs(MainActivity.this).edit().clear().commit();
+                ModStore.prefs(MainActivity.this).edit().clear().commit();
+                Slot.removeCurrent(MainActivity.this);
+                Intent i = new Intent(MainActivity.this, Slot.mainActivity(0));
+                startActivity(i);
+                overridePendingTransition(0, 0);
+                finish();
+                overridePendingTransition(0, 0);
+                ui.postDelayed(new Runnable() { // once Bot 1 is showing: nothing of this bot stays in memory
+                    public void run() {
+                        android.os.Process.killProcess(android.os.Process.myPid());
+                    }
+                }, 500);
+            }
+        });
     }
 
     // ---------------------------------------------------------------- Home
@@ -436,7 +587,7 @@ public class MainActivity extends Activity implements Hub.Listener {
                     toast(Hub.running ? "Still joining - try again in a moment" : "Start AFK first - Play mode uses the bot's connection");
                     return;
                 }
-                startActivity(new Intent(MainActivity.this, GameActivity.class));
+                startActivity(new Intent(MainActivity.this, Slot.gameActivity()));
             }
         });
     }
@@ -2509,6 +2660,21 @@ public class MainActivity extends Activity implements Hub.Listener {
     private View buildAccount() {
         LinearLayout col = page();
 
+        if (Slot.current() > 0) { // an added bot: say which, and let it be removed
+            LinearLayout bc = card(col);
+            bc.addView(text("Bot " + (Slot.current() + 1), 16, TEXT, true));
+            TextView bt = text("This bot has its own account and settings and runs alongside your other bots. Switch between them with the bar at the top.", 13, MUTED, false);
+            bt.setPadding(0, dp(4), 0, dp(10));
+            bc.addView(bt);
+            Button rm = smallButton("Remove this bot", SURFACE2);
+            rm.setOnClickListener(new View.OnClickListener() {
+                public void onClick(View v) {
+                    removeThisBot();
+                }
+            });
+            bc.addView(rm);
+        }
+
         LinearLayout ac = card(col);
         ac.addView(text("Microsoft account", 16, TEXT, true));
         account = text("", 14, TEXT, false);
@@ -2680,6 +2846,8 @@ public class MainActivity extends Activity implements Hub.Listener {
     @Override
     public void onChange() {
         boolean running = Hub.running;
+        publishSlot(this, false);
+        refreshSlots();
         int sc = Hub.color == Hub.GREEN ? GOOD : Hub.color == Hub.RED ? BAD : Hub.color == Hub.YELLOW ? WARN : MUTED;
         statusDot.setTextColor(sc == MUTED ? MUTED : sc);
         String word = Hub.color == Hub.GREEN ? "Online" : Hub.color == Hub.YELLOW ? "Connecting" : Hub.color == Hub.RED ? (running ? "Problem" : "Offline") : running ? "Starting" : "Stopped";
@@ -2807,14 +2975,23 @@ public class MainActivity extends Activity implements Hub.Listener {
             selectTab(T_ACCOUNT);
             return;
         }
+        final String me = app.afkbot.Settings.accountName(this);
+        for (int o = 0; o < Slot.MAX; o++) {
+            if (o == Slot.current() || !Slot.exists(this, o)) continue;
+            Slot.Status st = Slot.read(this, o);
+            if (st.running && !st.stale() && st.name.equalsIgnoreCase(me)) {
+                toast(me + " is already running as Bot " + (o + 1) + " - the server would kick one of them");
+                return;
+            }
+        }
         Hub.running = true;
         Hub.status("Starting...", Hub.YELLOW);
-        startForegroundService(new Intent(this, AfkService.class).setAction(AfkService.ACTION_START));
+        startForegroundService(new Intent(this, Slot.service()).setAction(AfkService.ACTION_START));
     }
 
     private void stopBot() {
         haptic(startStop);
-        startService(new Intent(this, AfkService.class).setAction(AfkService.ACTION_STOP));
+        startService(new Intent(this, Slot.service()).setAction(AfkService.ACTION_STOP));
     }
 
     private void confirm(String title, String message, String ok, final Runnable r) {
@@ -3054,5 +3231,17 @@ public class MainActivity extends Activity implements Hub.Listener {
 
     private void toast(String s) {
         Toast.makeText(this, s, Toast.LENGTH_SHORT).show();
+    }
+
+    /** The main screen of bot slot 1 (runs in its own process, ":bot1"; see Slot). */
+    public static final class Bot1 extends MainActivity {
+    }
+
+    /** The main screen of bot slot 2 (runs in its own process, ":bot2"; see Slot). */
+    public static final class Bot2 extends MainActivity {
+    }
+
+    /** The main screen of bot slot 3 (runs in its own process, ":bot3"; see Slot). */
+    public static final class Bot3 extends MainActivity {
     }
 }

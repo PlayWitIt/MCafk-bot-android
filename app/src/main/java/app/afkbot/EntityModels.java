@@ -121,12 +121,9 @@ final class EntityModels {
             tex = e.getString("tex").endsWith(".tga") ? decodeTga(img) : BitmapFactory.decodeByteArray(img, 0, img.length);
             if (tex == null) throw new IOException("couldn't read texture");
             writeMesh(meshFile, mesh);
-            FileOutputStream o = new FileOutputStream(texFile);
-            try {
-                tex.compress(Bitmap.CompressFormat.PNG, 100, o);
-            } finally {
-                o.close();
-            }
+            java.io.ByteArrayOutputStream png = new java.io.ByteArrayOutputStream();
+            tex.compress(Bitmap.CompressFormat.PNG, 100, png);
+            Slot.write(texFile, png.toByteArray()); // all at once: other bot slots share this cache
         }
         Model m = new Model(mesh, tex);
         if (limbData != null && limbData.length == 12 + mesh.length / Geo.STRIDE) {
@@ -142,12 +139,7 @@ final class EntityModels {
             String s = f.exists() ? ModStore.read(f) : null;
             if (s == null) {
                 s = new String(fetch("models/mobs.json"), StandardCharsets.UTF_8);
-                FileOutputStream o = new FileOutputStream(f);
-                try {
-                    o.write(s.getBytes(StandardCharsets.UTF_8));
-                } finally {
-                    o.close();
-                }
+                Slot.write(f, s);
             }
             mobsFile = new JSONObject(stripComments(s));
         }
@@ -200,13 +192,12 @@ final class EntityModels {
     }
 
     private static void writeMesh(File f, float[] a) throws IOException {
-        DataOutputStream o = new DataOutputStream(new java.io.BufferedOutputStream(new FileOutputStream(f)));
-        try {
-            o.writeInt(a.length);
-            for (float v : a) o.writeFloat(v);
-        } finally {
-            o.close();
-        }
+        java.io.ByteArrayOutputStream b = new java.io.ByteArrayOutputStream(4 + a.length * 4);
+        DataOutputStream o = new DataOutputStream(b);
+        o.writeInt(a.length);
+        for (float v : a) o.writeFloat(v);
+        o.flush();
+        Slot.write(f, b.toByteArray()); // all at once: other bot slots share this cache
     }
 
     /** Minimal TGA reader (true-colour, plain or RLE, 24/32 bit) for the textures Mojang ships as .tga. */

@@ -84,12 +84,7 @@ final class GameSkins {
             while ((n = in.read(buf)) > 0 && bo.size() < 512 * 1024) bo.write(buf, 0, n);
             in.close();
             png = bo.toByteArray();
-            FileOutputStream o = new FileOutputStream(f);
-            try {
-                o.write(png);
-            } finally {
-                o.close();
-            }
+            Slot.write(f, png); // all at once: other bot slots share this cache
         }
         Bitmap b = BitmapFactory.decodeByteArray(png, 0, png.length);
         if (b == null) return null;

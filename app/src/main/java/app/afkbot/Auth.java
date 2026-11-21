@@ -73,7 +73,7 @@ final class Auth {
     }
 
     static SharedPreferences prefs(Context c) {
-        return c.getSharedPreferences("auth", Context.MODE_PRIVATE);
+        return c.getSharedPreferences(Slot.prefs("auth"), Context.MODE_PRIVATE); // each bot slot signs in on its own
     }
 
     static String signedInName(Context c) {

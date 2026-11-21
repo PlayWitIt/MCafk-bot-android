@@ -9,7 +9,15 @@ final class Settings {
     }
 
     static SharedPreferences prefs(Context c) {
-        return c.getSharedPreferences("settings", Context.MODE_PRIVATE);
+        return c.getSharedPreferences(Slot.prefs("settings"), Context.MODE_PRIVATE); // each bot slot has its own settings
+    }
+
+    /** The name this slot plays as: the offline name, or the signed-in account's ("" if neither). */
+    static String accountName(Context c) {
+        Bot.Config cfg = get(c);
+        if (cfg.offline) return cfg.offlineName == null ? "" : cfg.offlineName;
+        String n = Auth.signedInName(c);
+        return n == null ? "" : n;
     }
 
     /** The live config (shared with the bot when it is running). */

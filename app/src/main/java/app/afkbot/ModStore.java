@@ -23,7 +23,7 @@ final class ModStore {
         if (initialised) return;
         initialised = true;
         final Context app = ctx.getApplicationContext();
-        NonIntel.init(new File(app.getFilesDir(), "non"));
+        NonIntel.init(new File(app.getFilesDir(), Slot.dir("non"))); // each bot slot keeps its own intel
         ModEngine.host = new Host(app);
         EntityModels.init(app);
         Hub.versionLoader = new Hub.VersionLoader() {
@@ -55,7 +55,7 @@ final class ModStore {
     }
 
     static SharedPreferences prefs(Context c) {
-        return c.getSharedPreferences("mods", Context.MODE_PRIVATE);
+        return c.getSharedPreferences(Slot.prefs("mods"), Context.MODE_PRIVATE); // which mods are on, per bot slot
     }
 
     static File dir(Context c) {
@@ -142,12 +142,7 @@ final class ModStore {
     }
 
     private static void write(File f, String s) throws IOException {
-        FileOutputStream o = new FileOutputStream(f);
-        try {
-            o.write(s.getBytes(StandardCharsets.UTF_8));
-        } finally {
-            o.close();
-        }
+        Slot.write(f, s); // all at once: other bot slots (processes) may read it
     }
 
     /** Downloads a mod from a link (e.g. a raw GitHub file). Call off the main thread. */

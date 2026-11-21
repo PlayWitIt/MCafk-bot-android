@@ -194,7 +194,7 @@ final class GameAssetStore {
     private static void writeZip(File f, Map<String, byte[]> files) throws IOException {
         //noinspection ResultOfMethodCallIgnored
         f.getParentFile().mkdirs();
-        File tmp = new File(f.getPath() + ".part");
+        File tmp = Slot.temp(f); // per process: two bot slots may download at the same time
         ZipOutputStream o = new ZipOutputStream(new BufferedOutputStream(new FileOutputStream(tmp)));
         try {
             for (Map.Entry<String, byte[]> e : files.entrySet()) {
