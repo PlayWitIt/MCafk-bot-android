@@ -45,11 +45,26 @@ final class GameAssetStore {
 
         /** A HUD sprite (e.g. "hud/hotbar"), decoded at its own size, or null. */
         Bitmap sprite(String name) {
-            byte[] b = files.get("assets/minecraft/textures/gui/sprites/" + name + ".png");
+            return texture("gui/sprites/" + name);
+        }
+
+        /** Any texture by its path under textures/ (e.g. "font/ascii"), decoded at its own size, or null. */
+        Bitmap texture(String path) {
+            byte[] b = files.get("assets/minecraft/textures/" + path + ".png");
             if (b == null) return null;
             BitmapFactory.Options o = new BitmapFactory.Options();
             o.inScaled = false;
             return BitmapFactory.decodeByteArray(b, 0, b.length, o);
+        }
+
+        /** A texture's ARGB pixels (row by row), or null. */
+        int[] pixels(String path) {
+            Bitmap b = texture(path);
+            if (b == null) return null;
+            int w = b.getWidth(), h = b.getHeight();
+            int[] px = new int[w * h];
+            for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) px[y * w + x] = b.getPixel(x, y);
+            return px;
         }
     }
 
@@ -57,7 +72,7 @@ final class GameAssetStore {
     static volatile String status = "";
 
     static File file(Context c, String version) {
-        return new File(c.getFilesDir(), "game/" + version + "/assets.zip");
+        return new File(c.getFilesDir(), "game/" + version + "/assets-v" + GameAssets.FORMAT + ".zip");
     }
 
     /** Loads (downloading the first time) the files for a version and builds atlas + models. Call off the UI thread. */

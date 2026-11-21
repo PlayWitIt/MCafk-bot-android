@@ -29,9 +29,17 @@ final class GameAtlas {
         // chests use 64x64 "entity" textures: 4x4-tile blocks from the bottom rows up
         int cx = 0, cy = GRID - 4;
         for (String name : new java.util.TreeSet<String>(files.keySet())) {
-            if (!name.startsWith("assets/minecraft/textures/entity/chest/") || !name.endsWith(".png")) continue;
+            if (!name.startsWith("assets/minecraft/textures/entity/") || !name.endsWith(".png")) continue;
+            boolean half = name.endsWith("/skeleton.png") || name.endsWith("/wither_skeleton.png"); // 64x32 skins
+            if (!half && !name.contains("/chest/") && !name.contains("/player/") && !name.endsWith("/zombie.png") && !name.endsWith("/creeper.png")
+                    && !name.endsWith("/piglin.png") && !name.endsWith("shield_base_nopattern.png")) continue;
             int[] px = img.decode(files.get(name), 64);
             if (px == null) continue;
+            if (half) { // decoded stretched to 64x64: squeeze back into the top half, leave the rest clear
+                int[] top = new int[64 * 64];
+                for (int y = 0; y < 32; y++) System.arraycopy(px, (y * 2) * 64, top, y * 64, 64);
+                px = top;
+            }
             for (int y = 0; y < 64; y++) System.arraycopy(px, y * 64, a.pixels, (cy * TILE + y) * SIZE + cx * TILE, 64);
             a.tiles.put(name.substring("assets/minecraft/textures/".length(), name.length() - 4), cy * GRID + cx);
             cx += 4;

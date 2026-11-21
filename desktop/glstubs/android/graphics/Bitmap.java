@@ -1,32 +1,33 @@
 package android.graphics;
 
-/** Desktop stand-in, just enough for GameAssetStore to compile and hold an atlas. */
+import java.awt.image.BufferedImage;
+
+/** Desktop stand-in backed by a BufferedImage. */
 public class Bitmap {
     public enum Config { ARGB_8888 }
 
-    private final int[] px;
-    private final int w, h;
+    final BufferedImage img;
 
-    private Bitmap(int[] px, int w, int h) {
-        this.px = px;
-        this.w = w;
-        this.h = h;
+    Bitmap(BufferedImage img) {
+        this.img = img;
     }
 
     public static Bitmap createBitmap(int[] colors, int width, int height, Config c) {
-        return new Bitmap(colors.clone(), width, height);
+        BufferedImage b = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+        b.setRGB(0, 0, width, height, colors, 0, width);
+        return new Bitmap(b);
     }
 
     public int getWidth() {
-        return w;
+        return img.getWidth();
     }
 
     public int getHeight() {
-        return h;
+        return img.getHeight();
     }
 
     public int getPixel(int x, int y) {
-        return px[y * w + x];
+        return img.getRGB(x, y);
     }
 
     public void recycle() {

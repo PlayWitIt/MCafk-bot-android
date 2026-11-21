@@ -9,6 +9,9 @@ final class GameAssets {
     private GameAssets() {
     }
 
+    /** Bump when wanted() changes, so phones download the new set (the file name includes it). */
+    static final int FORMAT = 2;
+
     static boolean wanted(String n) {
         if (n.endsWith(".mcmeta")) return false;
         return n.startsWith("assets/minecraft/blockstates/") || n.startsWith("assets/minecraft/models/block/")
@@ -18,6 +21,16 @@ final class GameAssets {
                 || n.startsWith("assets/minecraft/textures/gui/sprites/hud/")
                 || n.equals("assets/minecraft/textures/environment/sun.png")
                 || n.equals("assets/minecraft/textures/environment/moon_phases.png")
-                || n.equals("assets/minecraft/textures/environment/moon/full_moon.png");
+                || n.equals("assets/minecraft/textures/environment/moon/full_moon.png")
+                || n.equals("assets/minecraft/textures/environment/clouds.png")
+                || n.equals("assets/minecraft/textures/font/ascii.png")
+                || n.equals("assets/minecraft/textures/gui/container/inventory.png")
+                || n.equals("assets/minecraft/textures/gui/container/generic_54.png")
+                || n.startsWith("assets/minecraft/textures/gui/sprites/widget/button")
+                || n.startsWith("assets/minecraft/textures/entity/player/wide/") || n.startsWith("assets/minecraft/textures/entity/player/slim/")
+                || n.startsWith("assets/minecraft/textures/colormap/")
+                || n.equals("assets/minecraft/textures/entity/zombie/zombie.png") || n.equals("assets/minecraft/textures/entity/skeleton/skeleton.png")
+                || n.equals("assets/minecraft/textures/entity/skeleton/wither_skeleton.png") || n.equals("assets/minecraft/textures/entity/creeper/creeper.png")
+                || n.equals("assets/minecraft/textures/entity/piglin/piglin.png") || n.equals("assets/minecraft/textures/entity/shield_base_nopattern.png");
     }
 }
