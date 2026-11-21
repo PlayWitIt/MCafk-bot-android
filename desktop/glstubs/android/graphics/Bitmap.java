@@ -40,6 +40,10 @@ public class Bitmap {
         return img.getRGB(x, y);
     }
 
+    public void getPixels(int[] out, int off, int stride, int x, int y, int w, int h) {
+        img.getRGB(x, y, w, h, out, off, stride);
+    }
+
     public void recycle() {
     }
 }

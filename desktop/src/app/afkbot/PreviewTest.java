@@ -336,7 +336,19 @@ public class PreviewTest {
             return files;
         }
 
-        static final class Awt implements TexturePack.Images {
+        static final class Awt implements GameAtlas.Images {
+            public int[] decodeFull(byte[] png, int[] wh) {
+                try {
+                    BufferedImage b = javax.imageio.ImageIO.read(new java.io.ByteArrayInputStream(png));
+                    if (b == null) return null;
+                    wh[0] = b.getWidth();
+                    wh[1] = b.getHeight();
+                    return b.getRGB(0, 0, wh[0], wh[1], null, 0, wh[0]);
+                } catch (Exception e) {
+                    return null;
+                }
+            }
+
             public int[] decode16(byte[] png) {
                 return decode(png, 16, true);
             }

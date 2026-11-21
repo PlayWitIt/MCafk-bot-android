@@ -125,7 +125,20 @@ final class GameAssetStore {
         }
     }
 
-    static final TexturePack.Images IMAGES = new TexturePack.Images() {
+    static final GameAtlas.Images IMAGES = new GameAtlas.Images() {
+        @Override
+        public int[] decodeFull(byte[] png, int[] wh) {
+            Bitmap b = decode(png);
+            if (b == null) return null;
+            int w = b.getWidth(), h = b.getHeight();
+            int[] px = new int[w * h];
+            b.getPixels(px, 0, w, 0, 0, w, h);
+            b.recycle();
+            wh[0] = w;
+            wh[1] = h;
+            return px;
+        }
+
         @Override
         public int[] decode16(byte[] png) {
             Bitmap b = decode(png);

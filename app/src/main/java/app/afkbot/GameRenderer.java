@@ -228,6 +228,7 @@ final class GameRenderer implements GLSurfaceView.Renderer, MapData.Changes {
             dirty.clear();
             markAll();
         }
+        animateTextures(a);
         updateCamera();
         scheduleMeshing(a);
         for (int i = 0; i < 8; i++) {
@@ -463,7 +464,34 @@ final class GameRenderer implements GLSurfaceView.Renderer, MapData.Changes {
         }
     }
 
+    private int[] shownFrame = new int[0];
+    private final ByteBuffer frameBuf = ByteBuffer.allocateDirect(GameAtlas.TILE * GameAtlas.TILE * 4).order(ByteOrder.nativeOrder());
+
+    /** Water, lava, fire, portals...: puts each animated texture's current frame into the atlas (20 ticks a second). */
+    private void animateTextures(GameAssetStore.Loaded a) {
+        List<GameAtlas.Anim> anims = a.atlas.anims;
+        if (anims.isEmpty() || texId == 0) return;
+        if (shownFrame.length != anims.size()) {
+            shownFrame = new int[anims.size()];
+            java.util.Arrays.fill(shownFrame, -1);
+        }
+        long tick = System.currentTimeMillis() / 50;
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texId);
+        for (int i = 0; i < anims.size(); i++) {
+            GameAtlas.Anim an = anims.get(i);
+            int idx = an.order[(int) ((tick / an.frameTime) % an.order.length)];
+            if (idx == shownFrame[i]) continue;
+            shownFrame[i] = idx;
+            frameBuf.clear();
+            for (int p : an.frames[idx]) frameBuf.put((byte) (p >> 16)).put((byte) (p >> 8)).put((byte) p).put((byte) (p >>> 24));
+            frameBuf.position(0);
+            GLES20.glTexSubImage2D(GLES20.GL_TEXTURE_2D, 0, (an.tile % GameAtlas.GRID) * GameAtlas.TILE, (an.tile / GameAtlas.GRID) * GameAtlas.TILE,
+                    GameAtlas.TILE, GameAtlas.TILE, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, frameBuf);
+        }
+    }
+
     private void upload(GameAssetStore.Loaded a) {
+        shownFrame = new int[0];
         int[] ids = new int[1];
         if (texId != 0) GLES20.glDeleteTextures(1, new int[]{texId}, 0);
         GLES20.glGenTextures(1, ids, 0);

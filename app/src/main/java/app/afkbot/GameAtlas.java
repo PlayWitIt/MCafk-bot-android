@@ -13,6 +13,21 @@ final class GameAtlas {
     static final int OPAQUE = 0, CUTOUT = 1, TRANSLUCENT = 2;
 
     final int[] pixels = new int[SIZE * SIZE];
+
+    /** Also decodes a whole image at its own size (animated textures are a vertical strip of frames). */
+    interface Images extends TexturePack.Images {
+        /** ARGB pixels of the whole image, with its size put in wh[0], wh[1]; or null. */
+        int[] decodeFull(byte[] png, int[] wh);
+    }
+
+    /** An animated texture: its tile, every 16x16 frame, the frame order and ticks per frame (from its .mcmeta). */
+    static final class Anim {
+        int tile, frameTime = 1;
+        int[][] frames;
+        int[] order;
+    }
+
+    final java.util.List<Anim> anims = new java.util.ArrayList<Anim>();
     final Map<String, Integer> tiles = new HashMap<String, Integer>(); // "block/stone", "item/apple", "entity/chest/normal"
     final byte[] alpha = new byte[GRID * GRID];
     int used;
@@ -23,6 +38,7 @@ final class GameAtlas {
     }
 
     static GameAtlas build(Map<String, byte[]> files, TexturePack.Images img) {
+        Images full = img instanceof Images ? (Images) img : null;
         GameAtlas a = new GameAtlas();
         // tile 0: plain white (untextured faces get a flat colour)
         for (int y = 0; y < TILE; y++) for (int x = 0; x < TILE; x++) a.pixels[y * SIZE + x] = 0xFFFFFFFF;
@@ -68,9 +84,63 @@ final class GameAtlas {
                 }
                 a.alpha[t] = (byte) mode;
                 a.tiles.put(name.substring("assets/minecraft/textures/".length(), name.length() - 4), t);
+                byte[] meta = files.get(name + ".mcmeta");
+                if (meta != null && full != null) {
+                    Anim an = animation(t, files.get(name), new String(meta, java.nio.charset.StandardCharsets.UTF_8), full);
+                    if (an != null) a.anims.add(an);
+                }
             }
         }
         a.used = next;
         return a;
+    }
+
+    private static Anim animation(int tile, byte[] png, String meta, Images img) {
+        int[] wh = new int[2];
+        int[] px = img.decodeFull(png, wh);
+        if (px == null) return null;
+        int w = wh[0], h = wh[1];
+        if (w <= 0 || h < w * 2 || h % w != 0) return null;
+        int n = h / w;
+        Anim an = new Anim();
+        an.tile = tile;
+        an.frames = new int[n][];
+        for (int f = 0; f < n; f++) { // each frame scaled to 16x16 like the atlas tile
+            int[] fr = new int[TILE * TILE];
+            for (int y = 0; y < TILE; y++)
+                for (int x = 0; x < TILE; x++) fr[y * TILE + x] = px[(f * w + y * w / TILE) * w + x * w / TILE];
+            an.frames[f] = fr;
+        }
+        int[] order = null;
+        try {
+            org.json.JSONObject anim = new org.json.JSONObject(meta).optJSONObject("animation");
+            if (anim == null) return null;
+            an.frameTime = Math.max(1, anim.optInt("frametime", 1));
+            org.json.JSONArray fr = anim.optJSONArray("frames");
+            if (fr != null && fr.length() > 0) {
+                java.util.List<Integer> l = new java.util.ArrayList<Integer>();
+                for (int i = 0; i < fr.length(); i++) {
+                    Object o = fr.get(i);
+                    int idx = o instanceof org.json.JSONObject ? ((org.json.JSONObject) o).optInt("index") : fr.getInt(i);
+                    int time = o instanceof org.json.JSONObject ? ((org.json.JSONObject) o).optInt("time", an.frameTime) : an.frameTime;
+                    for (int k = 0; k < Math.max(1, time / an.frameTime); k++) l.add(Math.max(0, Math.min(n - 1, idx)));
+                }
+                order = new int[l.size()];
+                for (int i = 0; i < order.length; i++) order[i] = l.get(i);
+            }
+        } catch (org.json.JSONException e) {
+            return null;
+        }
+        if (order == null) {
+            order = new int[n];
+            for (int i = 0; i < n; i++) order[i] = i;
+        }
+        an.order = order;
+        return an;
+    }
+
+    /** The frame of an animation at a game tick. */
+    static int[] frameAt(Anim an, long tick) {
+        return an.frames[an.order[(int) ((tick / an.frameTime) % an.order.length)]];
     }
 }

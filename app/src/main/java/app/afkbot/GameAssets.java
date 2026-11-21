@@ -13,7 +13,7 @@ final class GameAssets {
     static final int FORMAT = 2;
 
     static boolean wanted(String n) {
-        if (n.endsWith(".mcmeta")) return false;
+        if (n.endsWith(".mcmeta")) return n.startsWith("assets/minecraft/textures/block/"); // animation timing
         return n.startsWith("assets/minecraft/blockstates/") || n.startsWith("assets/minecraft/models/block/")
                 || n.startsWith("assets/minecraft/models/item/") || n.startsWith("assets/minecraft/items/")
                 || n.startsWith("assets/minecraft/textures/block/") || n.startsWith("assets/minecraft/textures/item/")

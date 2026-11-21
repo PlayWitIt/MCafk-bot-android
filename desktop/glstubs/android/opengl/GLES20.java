@@ -78,6 +78,7 @@ public class GLES20 {
             USE = h("glUseProgram", V_I), ATTRIB_PTR = h("glVertexAttribPointer", FunctionDescriptor.ofVoid(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_BYTE, JAVA_INT, ADDRESS)),
             VIEWPORT = h("glViewport", V_IIII), GET_ERROR = h("glGetError", FunctionDescriptor.of(JAVA_INT)),
             ATTRIB4F = h("glVertexAttrib4f", FunctionDescriptor.ofVoid(JAVA_INT, JAVA_FLOAT, JAVA_FLOAT, JAVA_FLOAT, JAVA_FLOAT)),
+            TEX_SUB_IMAGE = h("glTexSubImage2D", FunctionDescriptor.ofVoid(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS)),
             READ_PIXELS = h("glReadPixels", FunctionDescriptor.ofVoid(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS));
 
     public static void glActiveTexture(int t) { try { ACTIVE_TEXTURE.invoke(t); } catch (Throwable e) { throw wrap(e); } }
@@ -124,6 +125,10 @@ public class GLES20 {
 
     public static void glTexImage2D(int t, int level, int internal, int w, int h, int border, int format, int type, Buffer px) {
         try { TEX_IMAGE.invoke(t, level, internal, w, h, border, format, type, ptr(px)); } catch (Throwable e) { throw wrap(e); }
+    }
+
+    public static void glTexSubImage2D(int t, int level, int x, int y, int w, int h, int format, int type, Buffer px) {
+        try { TEX_SUB_IMAGE.invoke(t, level, x, y, w, h, format, type, ptr(px)); } catch (Throwable e) { throw wrap(e); }
     }
 
     public static void glGenBuffers(int n, int[] out, int off) { gen(GEN_BUFFERS, n, out, off); }
