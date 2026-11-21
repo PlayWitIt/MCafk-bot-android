@@ -24,6 +24,7 @@ final class GameAssets {
                 || n.equals("assets/minecraft/textures/environment/moon/full_moon.png")
                 || n.equals("assets/minecraft/textures/environment/clouds.png")
                 || n.equals("assets/minecraft/textures/font/ascii.png")
+                || n.equals("assets/minecraft/lang/en_us.json")
                 || n.equals("assets/minecraft/textures/gui/container/inventory.png")
                 || n.equals("assets/minecraft/textures/gui/container/generic_54.png")
                 || n.startsWith("assets/minecraft/textures/gui/sprites/widget/button")

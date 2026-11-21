@@ -98,6 +98,7 @@ final class GameAssetStore {
             });
             writeZip(f, files);
         }
+        loadLanguage(files);
         status = "Building textures...";
         GameAtlas atlas = GameAtlas.build(files, IMAGES);
         Bitmap bmp = Bitmap.createBitmap(atlas.pixels, GameAtlas.SIZE, GameAtlas.SIZE, Bitmap.Config.ARGB_8888);
@@ -105,6 +106,23 @@ final class GameAssetStore {
         Loaded l = new Loaded(version, files, atlas, new GameModels(files, atlas, vd), bmp);
         current = l;
         return l;
+    }
+
+    /** Chat and death messages in proper English (the server sends many as translation keys). */
+    static void loadLanguage(Map<String, byte[]> files) {
+        byte[] b = files.get("assets/minecraft/lang/en_us.json");
+        if (b == null) return;
+        try {
+            org.json.JSONObject j = new org.json.JSONObject(new String(b, java.nio.charset.StandardCharsets.UTF_8));
+            Map<String, String> m = new HashMap<String, String>(j.length() * 2);
+            java.util.Iterator<String> it = j.keys();
+            while (it.hasNext()) {
+                String k = it.next();
+                m.put(k, j.optString(k));
+            }
+            Text.lang = m;
+        } catch (org.json.JSONException ignored) {
+        }
     }
 
     static final TexturePack.Images IMAGES = new TexturePack.Images() {

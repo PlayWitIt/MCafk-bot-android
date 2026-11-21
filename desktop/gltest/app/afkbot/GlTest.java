@@ -23,6 +23,8 @@ public class GlTest {
         Shapes.setVersion(vd);
         Map<String, byte[]> files = PreviewTest.Textures.files(Hub.versionName);
         GameAtlas atlas = GameAtlas.build(files, new PreviewTest.Textures.Awt());
+        GameAssetStore.loadLanguage(files);
+        System.out.println("[GL] translated: " + Text.flatten(new org.json.JSONObject("{\"translate\":\"death.attack.mob\",\"with\":[\"Tester\",{\"translate\":\"entity.minecraft.slime\"}]}").toMap()));
         GameModels models = new GameModels(files, atlas, vd);
         GameAssetStore.Loaded loaded = new GameAssetStore.Loaded(Hub.versionName, files, atlas, models,
                 android.graphics.Bitmap.createBitmap(atlas.pixels, GameAtlas.SIZE, GameAtlas.SIZE, android.graphics.Bitmap.Config.ARGB_8888));

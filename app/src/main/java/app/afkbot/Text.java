@@ -127,6 +127,9 @@ final class Text {
         }
     }
 
+    /** The game's full English strings (lang/en_us.json), once Play mode has loaded its game files; else null. */
+    static volatile Map<String, String> lang;
+
     @SuppressWarnings("unchecked")
     static String flatten(Object o) {
         if (o == null) return "";
@@ -143,7 +146,9 @@ final class Text {
             if (m.containsKey("")) sb.append(flatten(m.get("")));
             if (m.containsKey("translate")) {
                 String key = flatten(m.get("translate"));
-                String fmt = KNOWN.get(key);
+                Map<String, String> l = lang;
+                String fmt = l != null ? l.get(key) : null;
+                if (fmt == null) fmt = KNOWN.get(key);
                 List<String> args = new ArrayList<String>();
                 Object with = m.get("with");
                 if (with instanceof List) for (Object a : (List<Object>) with) args.add(flatten(a));
