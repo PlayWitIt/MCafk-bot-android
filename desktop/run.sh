@@ -12,11 +12,12 @@ CP=$LIB/json.jar:$LIB/rhino.jar
 S=app/src/main/java/app/afkbot
 rm -rf $OUT && mkdir -p $OUT
 javac -nowarn -encoding UTF-8 --release 8 -cp $CP -d $OUT $(find desktop/stubs -name '*.java') \
-  $S/{Bot,Buf,Text,Proto,Hub,World,MapData,ModEngine,ProtoDef,Inv,Shapes,Auth}.java desktop/src/app/afkbot/*.java 2>&1 \
+  $S/{Bot,Buf,Text,Proto,Hub,World,MapData,ModEngine,ProtoDef,Inv,Shapes,Auth,RemoteZip,TexturePack,GameState,GameLight,GameMesher,GameAssets,GameAtlas,GameModels}.java desktop/src/app/afkbot/*.java 2>&1 \
   | grep -v "^Note:\|warning\|^[0-9]* warning" || true
 mode=${1:-live}; shift || true
 case "$mode" in
   live) exec java -cp $OUT:$CP app.afkbot.LiveTest "$@" ;;
   real) exec java -Dafk.cmd=desktop/realsrv/cmd -cp $OUT:$CP app.afkbot.RealTest "$@" ;;
-  *) echo "usage: desktop/run.sh live [server] | real <walk|course|physics|diag|copper|shulker>"; exit 1 ;;
+  preview) exec java -Xmx1500m -Dafk.cmd=desktop/realsrv/cmd -cp $OUT:$CP app.afkbot.PreviewTest "$@" ;;
+  *) echo "usage: desktop/run.sh live [server] | real <walk|far|course|physics|diag|copper|shulker> | preview [outDir]"; exit 1 ;;
 esac

@@ -7,3 +7,5 @@ desktop/lib/
 desktop/build/
 desktop/state/
 desktop/realsrv/
+desktop/cache/
+desktop/preview/

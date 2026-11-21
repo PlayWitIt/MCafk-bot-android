@@ -88,6 +88,12 @@ SPEC=[
  ('P_S_USE_ENTITY','play','toServer',['use_entity']),
  ('P_S_USE_ITEM','play','toServer',['use_item']),
  ('P_C_HELD_SLOT','play','toClient',['held_item_slot']),
+ # Play mode (the full game screen): lighting, time of day, XP, weather/game mode, other players breaking blocks
+ ('P_C_UPDATE_LIGHT','play','toClient',['update_light']),
+ ('P_C_UPDATE_TIME','play','toClient',['update_time']),
+ ('P_C_EXPERIENCE','play','toClient',['experience']),
+ ('P_C_GAME_STATE','play','toClient',['game_state_change']),
+ ('P_C_BREAK_ANIM','play','toClient',['block_break_animation']),
 ]
 
 # ---- map colours (approximate, like a vanilla map) ----
@@ -279,7 +285,7 @@ for v,p in dp.items():
              'hardness':[(-1 if b.get('hardness') is None else b['hardness']) for b in blocks],
              'material':[b.get('material','default') for b in blocks],
              'harvest':[[int(k) for k in (b.get('harvestTools') or {}).keys()] for b in blocks],
-             'props':[props(b) if shape_code(b)>1 else [] for b in blocks]}
+             'props':[props(b) for b in blocks]} # every block (the Play screen's models need all of them)
     if coll is not None:
         out_obj['collision']=coll; out_obj['collisionShapes']={str(k):v for k,v in cshapes.items()}
     # plain .json: the Android build silently un-gzips *.gz assets and renames them (it compresses the APK anyway)

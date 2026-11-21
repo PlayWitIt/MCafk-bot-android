@@ -21,7 +21,19 @@ final class MapData {
         int layerY = Integer.MIN_VALUE; // cached layer slice
         int[] layerColor;
         short[] layerHeight;
+        // Light (Play mode only, see keepLight): per light section (index 0 = the section below the world),
+        // 2048 bytes of 4-bit values, or null. skyFull marks sections whose sky light wasn't sent (= fully lit).
+        byte[][] sky, block;
+        boolean[] skyFull;
+        volatile int lightVersion;
     }
+
+    /**
+     * Keep sky/block light from the server. Only while the Play screen is open: it costs ~100 KB per chunk, which
+     * the AFK bot, the map and the light 3D view don't need.
+     */
+    static volatile boolean keepLight;
+    static volatile int lightVersion;
 
     /** World Y to show in layer mode, or Integer.MIN_VALUE for the surface. */
     static volatile int layerY = Integer.MIN_VALUE;
@@ -129,6 +141,55 @@ final class MapData {
         int y = wy - minY;
         if (y < 0 || y >= c.secs.length * 16) return 0;
         return blockAt(c.secs, wx & 15, y, wz & 15);
+    }
+
+    /**
+     * Copies a size^3 cube of block states and light (as (sky << 4) | block, -1 unknown) starting at (x0, y0, z0),
+     * x fastest then z then y. One chunk lookup per column, so meshing a section is cheap.
+     */
+    static void copyBlocks(int x0, int y0, int z0, int size, int[] states, int[] light) {
+        int minYv = minY;
+        for (int dz = 0; dz < size; dz++)
+            for (int dx = 0; dx < size; dx++) {
+                int wx = x0 + dx, wz = z0 + dz;
+                Chunk c = CHUNKS.get(key(wx >> 4, wz >> 4));
+                for (int dy = 0; dy < size; dy++) {
+                    int i = (dy * size + dz) * size + dx;
+                    int wy = y0 + dy;
+                    if (c == null || c.secs == null) {
+                        states[i] = -1;
+                        light[i] = -1;
+                        continue;
+                    }
+                    int y = wy - minYv;
+                    states[i] = y < 0 || y >= c.secs.length * 16 ? 0 : blockAt(c.secs, wx & 15, y, wz & 15);
+                    if (c.sky == null) {
+                        light[i] = -1;
+                        continue;
+                    }
+                    int li = (y >> 4) + 1;
+                    if (y < 0) li = 0;
+                    if (li >= c.sky.length) {
+                        light[i] = 15 << 4;
+                        continue;
+                    }
+                    int idx = ((wy & 15) << 8) | ((wz & 15) << 4) | (wx & 15);
+                    byte[] sk = c.sky[li], bl = c.block[li];
+                    int sv = sk != null ? (sk[idx >> 1] >> ((idx & 1) << 2)) & 15 : c.skyFull[li] ? 15 : 0;
+                    int bv = bl != null ? (bl[idx >> 1] >> ((idx & 1) << 2)) & 15 : 0;
+                    light[i] = sv << 4 | bv;
+                }
+            }
+    }
+
+    /** True if a chunk section is known to be all air (nothing to mesh). */
+    static boolean sectionEmpty(int cx, int sy, int cz) {
+        Chunk c = CHUNKS.get(key(cx, cz));
+        if (c == null || c.secs == null) return false;
+        int si = sy - (minY >> 4);
+        if (si < 0 || si >= c.secs.length) return true;
+        Section s = c.secs[si];
+        return s.direct == null && s.single == 0;
     }
 
     static boolean loaded(int wx, int wz) {
@@ -312,9 +373,106 @@ final class MapData {
             }
         }
         c.secs = sections;
+        if (keepLight && proto >= 764 && sections != null) {
+            try {
+                skipBlockEntities(p);
+                readLight(p, c, sections.length);
+            } catch (IOException e) {
+                c.sky = c.block = null; // the blocks are fine; the game falls back to flat lighting here
+            }
+        }
         CHUNKS.put(key(cx, cz), c);
         version++;
         status = sections != null ? "" : "Terrain colours unavailable for this server version (showing height only)";
+    }
+
+    // ============================================================ light (Play mode)
+
+    /** Block entities in a chunk packet (1.20.2+): packed xz, y, type, network NBT without a root name. */
+    private static void skipBlockEntities(Buf.In p) throws IOException {
+        int n = p.varInt();
+        if (n < 0 || n > 65536) throw new IOException("bad block entity count");
+        for (int i = 0; i < n; i++) {
+            p.u8();
+            p.bytes(2);
+            p.varInt();
+            int t = p.u8();
+            if (t != 0) skipNbt(p, t);
+        }
+    }
+
+    private static long[] bitSet(Buf.In p) throws IOException {
+        int n = p.varInt();
+        if (n < 0 || n > 64) throw new IOException("bad bitset");
+        long[] a = new long[n];
+        for (int i = 0; i < n; i++) a[i] = p.i64();
+        return a;
+    }
+
+    private static boolean bit(long[] a, int i) {
+        return i >> 6 < a.length && (a[i >> 6] >>> (i & 63) & 1) != 0;
+    }
+
+    /** The "light data" structure shared by chunk packets and light update packets. */
+    private static void readLight(Buf.In p, Chunk c, int sections) throws IOException {
+        int n = sections + 2;
+        long[] skyMask = bitSet(p), blockMask = bitSet(p), emptySky = bitSet(p), emptyBlock = bitSet(p);
+        byte[][] sky = c.sky != null && c.sky.length == n ? c.sky : new byte[n][];
+        byte[][] block = c.block != null && c.block.length == n ? c.block : new byte[n][];
+        boolean[] full = c.skyFull != null && c.skyFull.length == n ? c.skyFull : new boolean[n];
+        if (c.sky == null) java.util.Arrays.fill(full, true);
+        int count = p.varInt();
+        for (int i = 0, k = 0; i < n && k < count; i++) {
+            if (!bit(skyMask, i)) continue;
+            int len = p.varInt();
+            sky[i] = p.bytes(len);
+            full[i] = false;
+            k++;
+        }
+        count = p.varInt();
+        for (int i = 0, k = 0; i < n && k < count; i++) {
+            if (!bit(blockMask, i)) continue;
+            int len = p.varInt();
+            block[i] = p.bytes(len);
+            k++;
+        }
+        for (int i = 0; i < n; i++) {
+            if (bit(emptySky, i)) {
+                sky[i] = null;
+                full[i] = false; // sent as empty: really dark (e.g. deep underground)
+            }
+            if (bit(emptyBlock, i)) block[i] = null;
+        }
+        c.sky = sky;
+        c.block = block;
+        c.skyFull = full;
+        c.lightVersion++;
+        lightVersion++;
+    }
+
+    /** A light update packet (after the packet id): new light for some sections of a loaded chunk. */
+    static void readLightUpdate(Buf.In p) throws IOException {
+        int cx = p.varInt(), cz = p.varInt();
+        Chunk c = CHUNKS.get(key(cx, cz));
+        if (c == null || c.secs == null || !keepLight) return;
+        readLight(p, c, c.secs.length);
+    }
+
+    /**
+     * Light at a world position as (sky << 4) | block, each 0..15; -1 if unknown (chunk or its light not loaded).
+     * Above the world counts as full sky light, below as none.
+     */
+    static int lightAt(int wx, int wy, int wz) {
+        Chunk c = CHUNKS.get(key(wx >> 4, wz >> 4));
+        if (c == null || c.secs == null || c.sky == null) return -1;
+        int li = ((wy - minY) >> 4) + 1; // light section index
+        if (li < 0) return 0;
+        if (li >= c.sky.length) return 15 << 4;
+        int idx = ((wy & 15) << 8) | ((wz & 15) << 4) | (wx & 15);
+        byte[] s = c.sky[li], b = c.block[li];
+        int sky = s != null ? (s[idx >> 1] >> ((idx & 1) << 2)) & 15 : c.skyFull[li] ? 15 : 0;
+        int bl = b != null ? (b[idx >> 1] >> ((idx & 1) << 2)) & 15 : 0;
+        return sky << 4 | bl;
     }
 
     private static int waterShade(Section[] s, int x, int y, int z) {

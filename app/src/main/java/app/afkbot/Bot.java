@@ -812,6 +812,10 @@ final class Bot {
             Hub.log("Server is switching worlds/reconfiguring...");
         } else if (pid == id(Proto.P_C_HEALTH)) {
             float h = p.f32();
+            if (p.remaining() > 0) {
+                GameState.food = p.varInt();
+                if (p.remaining() >= 4) GameState.saturation = p.f32();
+            }
             boolean died;
             synchronized (this) {
                 died = h <= 0 && health > 0;
@@ -925,6 +929,42 @@ final class Bot {
                     MapData.status = "Couldn't read a chunk: " + e.getMessage();
                 }
             }
+        } else if (pid == id(Proto.P_C_UPDATE_LIGHT)) {
+            if (MapData.keepLight) MapData.readLightUpdate(p);
+        } else if (pid == id(Proto.P_C_UPDATE_TIME)) {
+            p.i64(); // world age
+            long t;
+            if (proto >= 775) { // 26.1: a list of world clocks (id, total ticks, ...); the first is the day clock
+                t = GameState.dayTime;
+                if (p.varInt() > 0) {
+                    p.varInt(); // clock id
+                    t = readVarLong(p);
+                }
+                GameState.dayTicks = true;
+            } else {
+                t = p.i64();
+                GameState.dayTicks = proto >= 768 ? p.bool() : t >= 0; // older: negative = daylight cycle off
+                t = Math.abs(t);
+            }
+            GameState.dayTime = t;
+            GameState.dayTimeAt = System.currentTimeMillis();
+        } else if (pid == id(Proto.P_C_EXPERIENCE)) {
+            GameState.xpBar = p.f32();
+            GameState.xpLevel = p.varInt();
+        } else if (pid == id(Proto.P_C_GAME_STATE)) {
+            int reason = p.u8();
+            float v = p.f32();
+            if (reason == 1) GameState.rain = 1;
+            else if (reason == 2) GameState.rain = 0;
+            else if (reason == 7) GameState.rain = Math.max(0, Math.min(1, v));
+            else if (reason == 3) GameState.gameMode = (int) v;
+        } else if (pid == id(Proto.P_C_BREAK_ANIM)) {
+            p.varInt(); // who is breaking it
+            long v = p.i64();
+            int bx = (int) (v >> 38), by = (int) (v << 52 >> 52), bz = (int) (v << 26 >> 38);
+            int stage = (byte) p.u8();
+            if (stage >= 0 && stage <= 9) GameState.breaking.put(GameState.key(bx, by, bz), stage);
+            else GameState.breaking.remove(GameState.key(bx, by, bz));
         } else if (pid == id(Proto.P_C_UNLOAD_CHUNK)) {
             int cz = p.i32();
             int cx = p.i32();
@@ -2424,6 +2464,9 @@ final class Bot {
                 Proto.P_C_PLAYER_INFO, Proto.P_C_PLAYER_REMOVE, Proto.P_C_PLAYER_CHAT};
         for (int k : want) if (ids[k] == pid) return true;
         if (MapData.supported && (pid == id(Proto.P_C_MAP_CHUNK) || pid == id(Proto.P_C_UNLOAD_CHUNK))) return true;
+        // only decoded while the Play screen is open (keeps the AFK bot as light as before)
+        if (GameState.open && (pid == id(Proto.P_C_UPDATE_LIGHT) || pid == id(Proto.P_C_UPDATE_TIME) || pid == id(Proto.P_C_EXPERIENCE)
+                || pid == id(Proto.P_C_GAME_STATE) || pid == id(Proto.P_C_BREAK_ANIM))) return true;
         if (pid == id(Proto.P_C_BLOCK_CHANGE) || pid == id(Proto.P_C_MULTI_BLOCK) || pid == id(Proto.P_C_WINDOW_ITEMS)
                 || pid == id(Proto.P_C_SET_SLOT) || pid == id(Proto.P_C_OPEN_WINDOW) || pid == id(Proto.P_C_CLOSE_WINDOW)
                 || pid == id(Proto.P_C_HELD_SLOT)) return true;
