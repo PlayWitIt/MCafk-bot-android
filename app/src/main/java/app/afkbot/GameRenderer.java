@@ -667,6 +667,35 @@ final class GameRenderer implements GLSurfaceView.Renderer, MapData.Changes {
         euFog = GLES20.glGetUniformLocation(eProg, "uFog");
         euTint = GLES20.glGetUniformLocation(eProg, "uTint");
         modelGl.clear();
+        skinGl.clear();
+    }
+
+    /** GL textures of players' real skins, by URL (0 while one downloads). */
+    private final Map<String, Integer> skinGl = new java.util.HashMap<String, Integer>();
+
+    private int skinTex(String url) {
+        if (url == null) return 0;
+        Integer t = skinGl.get(url);
+        if (t != null) return t;
+        int[] px = GameSkins.get(url);
+        if (px == null) return 0;
+        if (skinGl.size() > 64) { // many players came and went: start over
+            for (int id : skinGl.values()) GLES20.glDeleteTextures(1, new int[]{id}, 0);
+            skinGl.clear();
+        }
+        ByteBuffer rgba = scratch(64 * 64 * 4);
+        for (int p : px) rgba.put((byte) (p >> 16)).put((byte) (p >> 8)).put((byte) p).put((byte) (p >>> 24));
+        rgba.position(0);
+        int[] ids = new int[1];
+        GLES20.glGenTextures(1, ids, 0);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, ids[0]);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_NEAREST);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_NEAREST);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
+        GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, 64, 64, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, rgba);
+        skinGl.put(url, ids[0]);
+        return ids[0];
     }
 
     private int[] modelGl(EntityModels.Model m) {
@@ -775,7 +804,8 @@ final class GameRenderer implements GLSurfaceView.Renderer, MapData.Changes {
                 GLES20.glVertexAttrib4f(eaLimb, 0, 0, 0, 0);
             }
             GLES20.glUniform1f(euSwing, swing);
-            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, g[1]);
+            int skin = d.kind == 'p' && m.texture.getWidth() == 64 && m.texture.getHeight() == 64 ? skinTex(d.skin) : 0;
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, skin != 0 ? skin : g[1]);
             GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, g[0]);
             GLES20.glVertexAttribPointer(eaPos, 3, GLES20.GL_FLOAT, false, Geo.STRIDE * 4, 0);
             GLES20.glVertexAttribPointer(eaUv, 2, GLES20.GL_FLOAT, false, Geo.STRIDE * 4, 12);

@@ -32,6 +32,7 @@ public class GameActivity extends Activity implements GameHud.Host {
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
+        GameSkins.init(getApplicationContext());
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         if (Build.VERSION.SDK_INT >= 28)

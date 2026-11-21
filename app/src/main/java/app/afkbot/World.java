@@ -37,6 +37,7 @@ final class World {
         int id = -1;
         String type = "";
         String item; // dropped items: the item id, if known
+        String skin; // players: their skin texture URL, if known
         float yaw;
         final char kind;
         final String label;
@@ -139,6 +140,18 @@ final class World {
         }
     }
 
+    /** Players' skin texture URLs (only Mojang's skin server is accepted) and whether they use the slim model. */
+    private static final Map<UUID, String> SKINS = new HashMap<UUID, String>();
+
+    static synchronized void putSkin(UUID u, String url) {
+        if (url != null && (url.startsWith("http://textures.minecraft.net/texture/") || url.startsWith("https://textures.minecraft.net/texture/")))
+            SKINS.put(u, url);
+    }
+
+    static synchronized String skinOf(UUID u) {
+        return u == null ? null : SKINS.get(u);
+    }
+
     static synchronized void putName(UUID u, String name) {
         NAMES.put(u, name);
         tabCount = NAMES.size();
@@ -187,6 +200,7 @@ final class World {
                 d.type = e.kind == 'p' ? "player" : e.type;
                 d.yaw = e.yaw;
                 d.item = e.item;
+                if (e.kind == 'p') d.skin = SKINS.get(e.uuid);
                 out.add(d);
             }
         }

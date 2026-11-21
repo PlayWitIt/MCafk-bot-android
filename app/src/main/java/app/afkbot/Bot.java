@@ -1694,6 +1694,18 @@ final class Bot {
         return Math.sqrt(dx * dx + dy * dy + dz * dz);
     }
 
+    /** The skin URL inside a player's "textures" property (base64 JSON), or null. */
+    private static String skinUrl(String base64) {
+        try {
+            String json = new String(android.util.Base64.decode(base64, android.util.Base64.DEFAULT), StandardCharsets.UTF_8);
+            JSONObject skin = new JSONObject(json).optJSONObject("textures");
+            skin = skin == null ? null : skin.optJSONObject("SKIN");
+            return skin == null ? null : skin.optString("url", null);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private void readPlayerInfo(Buf.In p) throws IOException {
         if (legacy()) {
             int action = p.varInt();
@@ -1729,9 +1741,9 @@ final class Bot {
                 World.putName(u, p.str());
                 int props = p.varInt();
                 for (int k = 0; k < props; k++) {
-                    p.str();
-                    p.str();
+                    String key = p.str(), value = p.str();
                     if (p.bool()) p.str();
+                    if (key.equals("textures")) World.putSkin(u, skinUrl(value)); // for the Play screen's player models
                 }
             }
             if ((actions & 0x02) != 0 && p.bool()) { // chat session
@@ -1740,7 +1752,10 @@ final class Bot {
                 p.byteArray();
                 p.byteArray();
             }
-            if ((actions & 0x04) != 0) p.varInt(); // game mode
+            if ((actions & 0x04) != 0) { // game mode (ours drives the Play HUD: no hearts in creative)
+                int gm = p.varInt();
+                if (playerName != null && playerName.equals(World.nameOf(u))) GameState.gameMode = gm;
+            }
             if ((actions & 0x08) != 0) p.varInt(); // listed
             if ((actions & 0x10) != 0) p.varInt(); // latency
             if ((actions & 0x20) != 0 && p.bool()) { // display name

@@ -44,13 +44,18 @@ public class GlTest {
         PreviewTest.cmd("effect give Tester minecraft:resistance infinite 255 true");
         PreviewTest.cmd("difficulty easy");
         String[] mobs = {"zombie", "skeleton", "creeper", "cow", "pig", "sheep", "chicken", "villager", "iron_golem", "spider"};
+        PreviewTest.cmd("kill @e[type=!player]"); // earlier runs' persistent mobs
+        Thread.sleep(500);
         for (int i = 0; i < mobs.length; i++)
-            PreviewTest.cmd("summon minecraft:" + mobs[i] + " " + (-4 + i * 1.6) + " -60 -9 {NoAI:1b,Rotation:[0f,0f],PersistenceRequired:1b}");
+            PreviewTest.cmd("summon minecraft:" + mobs[i] + " " + (-4 + i * 1.6) + " -60 -9 {NoAI:1b,Rotation:[0f,0f],PersistenceRequired:1b,equipment:{head:{id:\"minecraft:stone_button\",count:1}}}");
         // a few that walk around, to see the walk animation
         PreviewTest.cmd("summon minecraft:pig 6 -60 -6");
         PreviewTest.cmd("summon minecraft:cow 0 -60 -6");
-        PreviewTest.cmd("summon minecraft:zombie 9 -60 -6 {Rotation:[180f,0f]}");
         EntityModels.init(new android.content.Context());
+        for (String t : mobs) { // wait for each model to download (the game shows boxes until then)
+            EntityModels.get(t);
+            for (int w = 0; w < 40 && EntityModels.get(t) == null; w++) Thread.sleep(500);
+        }
         PreviewTest.cmd("damage Tester 7");
         PreviewTest.cmd("xp set Tester 12 levels");
         Thread.sleep(1200);
@@ -96,6 +101,27 @@ public class GlTest {
         shot(r, b, out + "/gl_close.png", 135, 28, 6000);
         PreviewTest.cmd("tp Tester 3 -60 -16 0 15");
         Thread.sleep(1500);
+        // a stand-in player with a "real" skin: a recoloured Steve served from the skin cache, so no network is needed
+        {
+            android.content.Context ctx = new android.content.Context();
+            GameSkins.init(ctx);
+            java.io.File skinDir = new java.io.File(ctx.getFilesDir(), "skins");
+            EntityModels.Model pm = null;
+            for (int w = 0; w < 40 && (pm = EntityModels.get("player")) == null; w++) Thread.sleep(500);
+            java.awt.image.BufferedImage st = new java.awt.image.BufferedImage(64, 64, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+            for (int y = 0; y < 64; y++) for (int x = 0; x < 64; x++) {
+                int c = pm.texture.getPixel(x, y);
+                if (y >= 16 && y < 48 && x >= 16 && x < 40) c = (c & 0xFF000000) | 0xC02020; // red shirt
+                st.setRGB(x, y, c);
+            }
+            javax.imageio.ImageIO.write(st, "png", new java.io.File(skinDir, "testskin.png"));
+            java.util.UUID u = java.util.UUID.randomUUID();
+            World.putName(u, "SkinTest");
+            World.putSkin(u, "http://textures.minecraft.net/texture/testskin");
+            World.add(new World.Ent(990001, 'p', "player", u, 3.0, -60, -3.5));
+            GameSkins.get("http://textures.minecraft.net/texture/testskin");
+            Thread.sleep(1500);
+        }
         for (int i = 0; i < 3; i++) { shot(r, b, out + "/gl_mobs.png", 0, 8, 6000); } // models download on first sight
         java.util.Set<String> types = new java.util.TreeSet<String>();
         for (World.Dot d : World.snapshot(null)) if (d.kind != 'i') types.add(d.type + "(" + d.kind + ")");

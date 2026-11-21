@@ -19,7 +19,7 @@ if [ "$mode" = gl ]; then
   # the Play renderer on real (Mesa) OpenGL ES: GLES20 calls go through Java's foreign function API (preview in 21)
   GOUT=desktop/build-gl; rm -rf $GOUT && mkdir -p $GOUT
   javac -nowarn -encoding UTF-8 --release 21 --enable-preview -cp $CP -d $GOUT $(find desktop/stubs desktop/glstubs -name '*.java') \
-    $S/{Bot,Buf,Text,Proto,Hub,World,NonIntel,MapData,ModEngine,ProtoDef,Inv,Shapes,Auth,RemoteZip,TexturePack,GameState,GameLight,GameMesher,GameAssets,GameAtlas,GameModels,GameIcons,GameRay,GameRenderer,GameAssetStore,GameHud,GameFont,EntityModels,Geo,ModStore,GameSky,GameBiomes}.java \
+    $S/{Bot,Buf,Text,Proto,Hub,World,NonIntel,MapData,ModEngine,ProtoDef,Inv,Shapes,Auth,RemoteZip,TexturePack,GameState,GameLight,GameMesher,GameAssets,GameAtlas,GameModels,GameIcons,GameRay,GameRenderer,GameAssetStore,GameHud,GameFont,EntityModels,Geo,ModStore,GameSky,GameBiomes,GameSkins}.java \
     desktop/src/app/afkbot/*.java desktop/gltest/app/afkbot/*.java 2>&1 | grep -v "^Note:\|warning\|^[0-9]* warning" || true
   exec java --enable-preview --enable-native-access=ALL-UNNAMED -Xmx1500m -Dafk.density=1.83 -Dafk.cmd=desktop/realsrv/cmd -cp $GOUT:$CP app.afkbot.GlTest "$@"
 fi
