@@ -105,6 +105,43 @@ final class Auth {
         return e instanceof IOException && !(e instanceof AuthException);
     }
 
+    /** Where Microsoft's sign-in page sends you back to, with ?code=... (or ?error=...). */
+    static final String REDIRECT = "https://login.live.com/oauth20_desktop.srf";
+
+    /**
+     * Microsoft's own sign-in page (choose an account, email, password), for the Minecraft client this app signs in
+     * as. prompt=select_account: it always asks which account, never signs in with one by itself.
+     */
+    static String loginUrl() {
+        try {
+            return "https://login.live.com/oauth20_authorize.srf?client_id=" + CLIENT_ID + "&response_type=code&scope="
+                    + java.net.URLEncoder.encode(SCOPE, "UTF-8") + "&redirect_uri=" + java.net.URLEncoder.encode(REDIRECT, "UTF-8")
+                    + "&prompt=select_account";
+        } catch (java.io.UnsupportedEncodingException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** Finishes a sign-in from the page: swaps the code it gave back for tokens, then Xbox and Minecraft. */
+    static Session signInWithCode(Context c, String code) throws Exception {
+        Resp r = request("POST", "https://login.live.com/oauth20_token.srf", form(
+                "client_id", CLIENT_ID, "code", code, "grant_type", "authorization_code", "redirect_uri", REDIRECT, "scope", SCOPE),
+                "application/x-www-form-urlencoded", null);
+        JSONObject j = json(r, "Microsoft (sign-in)");
+        if (j.has("error") || !j.has("access_token"))
+            throw new AuthException("Microsoft sign-in failed: " + j.optString("error_description", j.optString("error", "HTTP " + r.code)));
+        Hub.log("Step 1/4 OK: Microsoft account accepted");
+        for (int attempt = 1; ; attempt++) {
+            try {
+                return finish(c, j);
+            } catch (Exception e) {
+                if (!isNetworkProblem(e) || attempt >= 20) throw e;
+                Hub.log("Network problem (" + e.getMessage() + "), retrying...");
+                pause(5000);
+            }
+        }
+    }
+
     /** Full interactive sign-in. Blocks until the user enters the code (or it expires). */
     static Session signIn(Context c, Cancel cancel) throws Exception {
         JSONObject dc = new JSONObject(post("https://login.live.com/oauth20_connect.srf", form(

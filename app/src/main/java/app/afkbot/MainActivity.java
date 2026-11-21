@@ -78,7 +78,7 @@ public class MainActivity extends Activity implements Hub.Listener {
     // Account
     private TextView account, codeBox, codeBig, fullLog;
     private View codeView;
-    private Button signIn, signOut, openLink, copyCode, openBrowser, battery;
+    private Button signIn, signOut, openLink, copyCode, openBrowser, useCode, battery;
     private ScrollView logScroll;
     private String lastLog = "";
 
@@ -496,7 +496,7 @@ public class MainActivity extends Activity implements Hub.Listener {
         setupButton.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
                 selectTab(T_ACCOUNT);
-                if (signInThread == null && Auth.signedInName(MainActivity.this) == null) startSignIn();
+                if (signInThread == null && Auth.signedInName(MainActivity.this) == null) openMicrosoftLogin();
             }
         });
 
@@ -2994,17 +2994,25 @@ public class MainActivity extends Activity implements Hub.Listener {
         signOut = smallButton("Sign out", SURFACE2);
         accRow.addView(signIn, weight());
         accRow.addView(signOut, weight());
+        LinearLayout codeRowAlt = row(ac);
+        useCode = smallButton("Use a code instead", SURFACE2);
+        codeRowAlt.addView(useCode, weight());
+        useCode.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                startSignIn(); // microsoft.com/link with a code (e.g. on another device)
+            }
+        });
         signIn.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 if (signInThread != null) cancelSignIn = true;
-                else startSignIn();
+                else openMicrosoftLogin();
             }
         });
         signOut.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                confirm("Sign out?", "You'll need a new code from microsoft.com/link to sign in again." + (Hub.running ? " The bot keeps its current connection until you stop it." : ""), "Sign out", new Runnable() {
+                confirm("Sign out?", "You'll sign in with Microsoft again to use this bot." + (Hub.running ? " The bot keeps its current connection until you stop it." : ""), "Sign out", new Runnable() {
                     public void run() {
                         Auth.signOut(MainActivity.this);
                         Hub.log("Signed out");
@@ -3107,7 +3115,7 @@ public class MainActivity extends Activity implements Hub.Listener {
     @Override
     public void onChange() {
         boolean running = Hub.running;
-        if (signInDialog != null && signInThread == null) { // signed in (or cancelled/failed): the page has done its job
+        if (signInDialog != null && pageForCode && signInThread == null) { // signed in (or cancelled/failed): the page has done its job
             if (Auth.signedInName(this) != null) toast("Signed in as " + Auth.signedInName(this));
             closePrivateSignIn();
         }
@@ -3126,8 +3134,8 @@ public class MainActivity extends Activity implements Hub.Listener {
             startStop.setText(running ? "Stop" : "Start AFK");
             boolean needSignIn = !cfg.offline && name == null;
             setupCard.setVisibility(needSignIn && !running ? View.VISIBLE : View.GONE);
-            if (needSignIn) setupText.setText(signInThread != null ? "Sign-in is in progress - finish it on the Account tab." :
-                    "Sign in with the Microsoft account that owns Minecraft. You'll get a short code to enter at microsoft.com/link - no password is typed into this app.");
+            if (needSignIn) setupText.setText(signInThread != null ? "Signing in... (see the Account tab)" :
+                    "Sign in with the Microsoft account that owns Minecraft: Microsoft's own sign-in page opens, where you choose the account or type its email and password.");
             if (needSignIn) setupButton.setText(signInThread != null ? "Show my code" : "Sign in with Microsoft");
             startStop.setBackground(running ? round(0xFF3A1D24, dp(14), BAD) : gradient(ACCENT, ACCENT2, dp(14)));
             boolean live = running && World.inWorld;
@@ -3193,6 +3201,7 @@ public class MainActivity extends Activity implements Hub.Listener {
         }
         signIn.setText(signing ? "Cancel" : name != null ? "Switch account" : "Sign in with Microsoft");
         signOut.setVisibility(name != null && !signing ? View.VISIBLE : View.GONE);
+        useCode.setVisibility(signing ? View.GONE : View.VISIBLE);
         String code = Hub.authCode;
         boolean showCode = signing && code != null;
         codeView.setVisibility(showCode ? View.VISIBLE : View.GONE);
@@ -3304,11 +3313,71 @@ public class MainActivity extends Activity implements Hub.Listener {
      * so it never reuses the account the phone's browser is signed into: you choose or type the account. Closes by
      * itself when the sign-in finishes, and forgets the web session afterwards.
      */
-    @android.annotation.SuppressLint("SetJavaScriptEnabled")
     private void openPrivateSignIn() {
         String code = Hub.authCode;
         if (code == null) return;
+        openWebPage("https://www.microsoft.com/link?otc=" + Uri.encode(code), "Code " + code + " · choose the account for this bot", true);
+    }
+
+    /** The page is for the code sign-in (closes when that finishes), not the full one (closes on its redirect). */
+    private boolean pageForCode;
+
+    /**
+     * The real Microsoft sign-in: choose an account, or type an email and password, on Microsoft's own page, here in
+     * the app with nothing saved, so it never picks an account by itself. Finishes when Microsoft sends the page
+     * back with a code.
+     */
+    private void openMicrosoftLogin() {
+        Hub.authError = null;
+        openWebPage(Auth.loginUrl(), "Choose the account for " + (Slot.current() > 0 || Slot.exists(this, 1) || Slot.exists(this, 2) || Slot.exists(this, 3)
+                ? "Bot " + (Slot.current() + 1) : "this bot") + ": email, then password", false);
+    }
+
+    /** Microsoft sent the page back: a code finishes the sign-in, an error says why. True if it was that. */
+    private boolean loginRedirect(String url) {
+        if (pageForCode || url == null || !url.startsWith(Auth.REDIRECT)) return false;
+        Uri u = Uri.parse(url);
+        final String code = u.getQueryParameter("code");
+        String err = u.getQueryParameter("error_description");
+        if (err == null) err = u.getQueryParameter("error");
         closePrivateSignIn();
+        if (code != null) finishWebLogin(code);
+        else if (err != null && !"access_denied".equals(u.getQueryParameter("error"))) {
+            Hub.authError = err;
+            Hub.fire();
+        }
+        return true;
+    }
+
+    private void finishWebLogin(final String code) {
+        cancelSignIn = false;
+        Hub.authError = null;
+        Hub.log("Finishing Microsoft sign-in...");
+        final android.content.Context ctx = getApplicationContext();
+        Thread t = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Auth.signInWithCode(ctx, code);
+                } catch (Exception e) {
+                    String m = e.getMessage() != null ? e.getMessage() : e.toString();
+                    Hub.authError = m;
+                    Hub.log("Sign-in failed: " + m);
+                } finally {
+                    signInThread = null;
+                    Hub.fire();
+                }
+            }
+        }, "sign-in");
+        signInThread = t;
+        t.start();
+        onChange();
+    }
+
+    @android.annotation.SuppressLint("SetJavaScriptEnabled")
+    private void openWebPage(String url, String subtitle, boolean forCode) {
+        closePrivateSignIn();
+        pageForCode = forCode;
         forgetWebSignIns();
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
@@ -3320,7 +3389,7 @@ public class MainActivity extends Activity implements Hub.Listener {
         LinearLayout titles = new LinearLayout(this);
         titles.setOrientation(LinearLayout.VERTICAL);
         titles.addView(text("Microsoft sign-in" + (Slot.current() > 0 || Slot.exists(this, 1) || Slot.exists(this, 2) || Slot.exists(this, 3) ? " · Bot " + (Slot.current() + 1) : ""), 15, TEXT, true));
-        titles.addView(text("Code " + code + " · choose the account for this bot", 12, MUTED, false));
+        titles.addView(text(subtitle, 12, MUTED, false));
         bar.addView(titles, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         Button close = smallButton("Close", SURFACE2);
         bar.addView(close);
@@ -3333,8 +3402,14 @@ public class MainActivity extends Activity implements Hub.Listener {
         web.setWebViewClient(new android.webkit.WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(android.webkit.WebView v, android.webkit.WebResourceRequest r) {
+                if (loginRedirect(r.getUrl().toString())) return true;
                 String scheme = r.getUrl().getScheme();
                 return !"https".equals(scheme) && !"http".equals(scheme); // stay on the web; ignore app links
+            }
+
+            @Override
+            public void onPageStarted(android.webkit.WebView v, String u, android.graphics.Bitmap icon) {
+                if (loginRedirect(u)) v.stopLoading(); // (server-side redirects don't always go through the above)
             }
         });
         box.addView(web, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
@@ -3359,7 +3434,7 @@ public class MainActivity extends Activity implements Hub.Listener {
         signInDialog = d;
         signInWeb = web;
         d.show();
-        web.loadUrl("https://www.microsoft.com/link?otc=" + Uri.encode(code));
+        web.loadUrl(url);
     }
 
     @Override
