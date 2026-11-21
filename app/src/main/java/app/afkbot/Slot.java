@@ -99,6 +99,11 @@ final class Slot {
         return slotClass("GameActivity", current());
     }
 
+    /** This slot's Microsoft sign-in screen. */
+    static Class<?> loginActivity() {
+        return slotClass("LoginActivity", current());
+    }
+
     /** This slot's bot service. */
     static Class<?> service() {
         return slotClass("AfkService", current());

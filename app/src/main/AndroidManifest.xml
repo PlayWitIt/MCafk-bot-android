@@ -123,5 +123,34 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Keeps a Minecraft server connection alive while the phone is locked" />
         </service>
+
+        <!-- Microsoft sign-in, full screen (one per bot slot, in that slot's process) -->
+        <activity
+            android:name=".LoginActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|uiMode|smallestScreenSize"
+            android:exported="false"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
+            android:windowSoftInputMode="adjustResize" />
+        <activity
+            android:name=".LoginActivity$Bot1"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|uiMode|smallestScreenSize"
+            android:exported="false"
+            android:process=":bot1"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
+            android:windowSoftInputMode="adjustResize" />
+        <activity
+            android:name=".LoginActivity$Bot2"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|uiMode|smallestScreenSize"
+            android:exported="false"
+            android:process=":bot2"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
+            android:windowSoftInputMode="adjustResize" />
+        <activity
+            android:name=".LoginActivity$Bot3"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|uiMode|smallestScreenSize"
+            android:exported="false"
+            android:process=":bot3"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
+            android:windowSoftInputMode="adjustResize" />
     </application>
 </manifest>

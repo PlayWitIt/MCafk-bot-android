@@ -168,6 +168,11 @@ public class MainActivity extends Activity implements Hub.Listener {
         Hub.addListener(this);
         Auth.wake();
         if (signInThread == null && Auth.pendingCode(this) != null && Auth.signedInName(this) == null) resumeCodeSignIn();
+        if (browserLogin) ui.postDelayed(new Runnable() {
+            public void run() {
+                if (resumed && browserLogin) showPasteAddress();
+            }
+        }, 300);
         onChange();
         update3dLifecycle();
         ui.post(radarTick);
@@ -497,7 +502,7 @@ public class MainActivity extends Activity implements Hub.Listener {
         setupButton.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
                 selectTab(T_ACCOUNT);
-                if (signInThread == null && Auth.signedInName(MainActivity.this) == null) showPasswordLogin();
+                if (signInThread == null && Auth.signedInName(MainActivity.this) == null) openMicrosoftLogin();
             }
         });
 
@@ -2354,8 +2359,7 @@ public class MainActivity extends Activity implements Hub.Listener {
                 .show();
     }
 
-    @Override
-    protected void onActivityResult(int req, int res, Intent data) {
+    private void onActivityResultMods(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
         if (req != PICK_MOD || res != RESULT_OK || data == null || data.getData() == null) return;
         try {
@@ -3004,10 +3008,12 @@ public class MainActivity extends Activity implements Hub.Listener {
             public void onClick(View v) {
                 new android.app.AlertDialog.Builder(MainActivity.this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
                         .setTitle("Other ways to sign in")
-                        .setItems(new String[]{"Microsoft's sign-in page (in the app)", "A code for microsoft.com/link (any device)"},
+                        .setItems(new String[]{"Microsoft's page in my browser, then paste the address it ends on", "Type the email and password here",
+                                        "A code for microsoft.com/link (any device)"},
                                 new android.content.DialogInterface.OnClickListener() {
                                     public void onClick(android.content.DialogInterface d, int which) {
-                                        if (which == 0) openMicrosoftLogin();
+                                        if (which == 0) browserSignIn();
+                                        else if (which == 1) showPasswordLogin();
                                         else startSignIn();
                                     }
                                 })
@@ -3019,7 +3025,7 @@ public class MainActivity extends Activity implements Hub.Listener {
             @Override
             public void onClick(View v) {
                 if (signInThread != null) cancelSignIn = true;
-                else showPasswordLogin();
+                else openMicrosoftLogin();
             }
         });
         signOut.setOnClickListener(new View.OnClickListener() {
@@ -3148,7 +3154,7 @@ public class MainActivity extends Activity implements Hub.Listener {
             boolean needSignIn = !cfg.offline && name == null;
             setupCard.setVisibility(needSignIn && !running ? View.VISIBLE : View.GONE);
             if (needSignIn) setupText.setText(signInThread != null ? "Signing in... (see the Account tab)" :
-                    "Sign in with the Microsoft account that owns Minecraft: type its email and password (they go straight to Microsoft).");
+                    "Sign in with the Microsoft account that owns Minecraft, on Microsoft's own sign-in page (choose the account, or use its email, password and codes).");
             if (needSignIn) setupButton.setText(signInThread != null ? "Show my code" : "Sign in with Microsoft");
             startStop.setBackground(running ? round(0xFF3A1D24, dp(14), BAD) : gradient(ACCENT, ACCENT2, dp(14)));
             boolean live = running && World.inWorld;
@@ -3329,7 +3335,75 @@ public class MainActivity extends Activity implements Hub.Listener {
     private void openPrivateSignIn() {
         String code = Hub.authCode;
         if (code == null) return;
-        openWebPage("https://www.microsoft.com/link?otc=" + Uri.encode(code), "Code " + code + " · choose the account for this bot", true);
+        Intent i = new Intent(this, Slot.loginActivity());
+        i.putExtra(LoginActivity.EXTRA_URL, "https://www.microsoft.com/link?otc=" + Uri.encode(code));
+        i.putExtra(LoginActivity.EXTRA_CODE_PAGE, true);
+        startActivity(i);
+    }
+
+    private static final int LOGIN = 77;
+    /** You went to sign in in your browser: when you're back, offer to paste the address it ended on. */
+    private boolean browserLogin;
+
+    /** Microsoft's sign-in page in your own browser, with everything it offers; you paste the address it ends on. */
+    private void browserSignIn() {
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(Auth.loginUrl())));
+            browserLogin = true;
+            toast("Sign in, then copy the address of the page you end on and come back");
+        } catch (Exception e) {
+            toast("No browser found");
+        }
+    }
+
+    /** Paste the address the browser ended on (https://login.live.com/oauth20_desktop.srf?code=...). */
+    private void showPasteAddress() {
+        browserLogin = false;
+        final EditText e = edit("https://login.live.com/oauth20_desktop.srf?code=...", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        try {
+            ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (cm.hasPrimaryClip() && cm.getPrimaryClip().getItemCount() > 0) {
+                CharSequence t = cm.getPrimaryClip().getItemAt(0).getText();
+                if (t != null && t.toString().contains("code=")) e.setText(t.toString().trim());
+            }
+        } catch (Exception ignored) {
+        }
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setPadding(dp(20), dp(8), dp(20), 0);
+        col.addView(text("After signing in, your browser shows a blank page. Copy its address (tap the address bar, copy) and paste it here.", 13, MUTED, false));
+        col.addView(e);
+        new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle("Finish signing in")
+                .setView(col)
+                .setPositiveButton("Sign in", new android.content.DialogInterface.OnClickListener() {
+                    public void onClick(android.content.DialogInterface d, int w) {
+                        String u = e.getText().toString().trim();
+                        String code = Auth.query(u, "code");
+                        if (code == null && u.startsWith("M.")) code = u; // just the code
+                        if (code == null) {
+                            String err = Auth.query(u, "error_description");
+                            toast(err != null ? err : "That address has no sign-in code in it");
+                            return;
+                        }
+                        finishWebLogin(code);
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    @Override
+    protected void onActivityResult(int req, int res, Intent data) {
+        if (req == LOGIN) {
+            if (data != null && data.getStringExtra(LoginActivity.RESULT_CODE) != null) finishWebLogin(data.getStringExtra(LoginActivity.RESULT_CODE));
+            else if (data != null && data.getStringExtra(LoginActivity.RESULT_ERROR) != null) {
+                Hub.authError = data.getStringExtra(LoginActivity.RESULT_ERROR);
+                Hub.fire();
+            }
+            return;
+        }
+        onActivityResultMods(req, res, data);
     }
 
     /**
@@ -3421,8 +3495,9 @@ public class MainActivity extends Activity implements Hub.Listener {
      */
     private void openMicrosoftLogin() {
         Hub.authError = null;
-        openWebPage(Auth.loginUrl(), "Choose the account for " + (Slot.current() > 0 || Slot.exists(this, 1) || Slot.exists(this, 2) || Slot.exists(this, 3)
-                ? "Bot " + (Slot.current() + 1) : "this bot") + ": email, then password", false);
+        Intent i = new Intent(this, Slot.loginActivity());
+        i.putExtra(LoginActivity.EXTRA_URL, Auth.loginUrl());
+        startActivityForResult(i, LOGIN);
     }
 
     /** Microsoft sent the page back: a code finishes the sign-in, an error says why. True if it was that. */
