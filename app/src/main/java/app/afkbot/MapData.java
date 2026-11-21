@@ -35,6 +35,19 @@ final class MapData {
     static volatile boolean keepLight;
     static volatile int lightVersion;
 
+    /** Tells the Play screen's renderer what changed, so it re-meshes only those sections. */
+    interface Changes {
+        void chunk(int cx, int cz); // loaded, replaced or unloaded
+
+        void block(int x, int y, int z);
+
+        void light(int cx, int cz);
+    }
+
+    static volatile Changes changes;
+    /** Bumped when everything is dropped (new world / dimension). */
+    static volatile int epoch;
+
     /** World Y to show in layer mode, or Integer.MIN_VALUE for the surface. */
     static volatile int layerY = Integer.MIN_VALUE;
 
@@ -57,6 +70,7 @@ final class MapData {
     static void clear() {
         CHUNKS.clear();
         version++;
+        epoch++;
     }
 
     static int chunkCount() {
@@ -65,6 +79,8 @@ final class MapData {
 
     static void unload(int cx, int cz) {
         if (CHUNKS.remove(key(cx, cz)) != null) version++;
+        Changes ch = changes;
+        if (ch != null) ch.chunk(cx, cz);
     }
 
     /** Called once per connection with the table for the server's version. */
@@ -230,6 +246,16 @@ final class MapData {
         c.height[i] = (short) top;
         c.layerY = Integer.MIN_VALUE;
         version++;
+        Changes ch = changes;
+        if (ch != null) ch.block(wx, wy, wz);
+    }
+
+    /** Frees light data (when the Play screen closes). */
+    static void dropLight() {
+        for (Chunk c : CHUNKS.values()) {
+            c.sky = c.block = null;
+            c.skyFull = null;
+        }
     }
 
     private static int lookupColor(int state) {
@@ -383,6 +409,8 @@ final class MapData {
         }
         CHUNKS.put(key(cx, cz), c);
         version++;
+        Changes ch = changes;
+        if (ch != null) ch.chunk(cx, cz);
         status = sections != null ? "" : "Terrain colours unavailable for this server version (showing height only)";
     }
 
@@ -456,6 +484,8 @@ final class MapData {
         Chunk c = CHUNKS.get(key(cx, cz));
         if (c == null || c.secs == null || !keepLight) return;
         readLight(p, c, c.secs.length);
+        Changes ch = changes;
+        if (ch != null) ch.light(cx, cz);
     }
 
     /**

@@ -100,6 +100,11 @@ public class PreviewTest {
 
         // ---- mesh the sections around the player ----
         GameMesher mesher = new GameMesher(vd, atlas, models);
+        GameIcons icons = new GameIcons(files, atlas);
+        for (String it : new String[]{"diamond_sword", "apple", "grass_block", "oak_planks", "furnace", "oak_log", "torch", "oak_leaves", "chest", "compass", "bow", "glass", "oak_stairs", "red_bed"}) {
+            GameIcons.Icon ic = icons.get(it);
+            say(String.format("icon %-14s flat=%d top=%d side=%d front=%d tint=%06x", it, ic.flat, ic.top, ic.side, ic.front, ic.tint));
+        }
         // diagnostics
         int grass = MapData.stateAt(-5, -61, -5);
         say("grass state " + grass + " " + Shapes.id(grass) + " quads " + models.quads(grass).length + " tile(top)=" + atlas.tile("block/grass_block_top"));

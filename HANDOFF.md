@@ -22,8 +22,15 @@ every move against vanilla physics, so anything not bit-exact gets set back.
    never accepted our movement, so it still thought the player was at the join spot, too far away to open anything.
    That would also explain why a nearby axe scrape worked. It works on the local vanilla server (`copper`, `shulker`).
    **The user's base is sensitive: on Constantiam only walk, jump and sprint unless the user explicitly allows more.**
-3. **Play mode:** the user wants it built entirely in this app, with no third-party launcher. The Amethyst-based
-   add-on from v7.6/v7.7 was removed. Play mode is being written from scratch as an experimental feature.
+3. **Play mode (v7.8, experimental):** built entirely in this app (the user wants no third-party launcher; the
+   Amethyst-based add-on from v7.6/v7.7 was removed). It's separate from the light 3D tab, which must stay as is.
+   - `GameModels`/`GameAtlas`/`GameMesher`/`GameLight` are pure Java and run in `desktop/run.sh preview`, which
+     renders real server data to PNGs with a software rasterizer that matches the shader. Use it to check visual
+     changes before building.
+   - `GameRenderer` (GLES 2.0), `GameHud` (HUD and touch controls), `GameActivity` and `GameAssetStore`
+     (downloads about 3 MB once) are the Android side.
+   - Light data and the extra packets only exist while the Play screen is open (`MapData.keepLight`, `GameState.open`).
+   - It has not been seen on a real phone yet.
 
 Commits are authored as "PlayWit Creations". Don't add tool attribution or co-author lines anywhere.
 

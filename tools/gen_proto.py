@@ -229,6 +229,8 @@ for v,p in dp.items():
     mx=max(i['id'] for i in items)
     inames=['']*(mx+1)
     for i in items: inames[i['id']]=i['displayName']
+    iids=['']*(mx+1)
+    for i in items: iids[i['id']]=i['name']
     blocks=sorted(json.load(open('data/'+p['blocks']+'/blocks.json')), key=lambda b:b['minStateId'])
     def shape_code(b):
         nm=b['name']; bb=b.get('boundingBox')
@@ -278,7 +280,7 @@ for v,p in dp.items():
             if isinstance(v,list): used.update(v)
             elif v>=0: used.add(v)
         cshapes={k:[[round(x,5) for x in bx] for bx in cshapes[str(k)]] for k in sorted(used)}
-    out_obj={'protocol':n,'packets':pk,'types':want,'items':inames,
+    out_obj={'protocol':n,'packets':pk,'types':want,'items':inames,'itemIds':iids,
              'blockMin':[b['minStateId'] for b in blocks],'blockNames':[b['displayName'] for b in blocks],
              'shapes':[shape_code(b) for b in blocks],
              'blockIds':[b['name'] for b in blocks],

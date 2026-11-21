@@ -68,8 +68,22 @@ final class Hub {
             CHAT.add(line);
             while (CHAT.size() > 300) CHAT.removeFirst();
         }
+        synchronized (RECENT) {
+            RECENT.add(new Object[]{msg, System.currentTimeMillis()});
+            while (RECENT.size() > 60) RECENT.removeFirst();
+        }
         chatVersion++;
         fire();
+    }
+
+    private static final LinkedList<Object[]> RECENT = new LinkedList<Object[]>();
+
+    /** The last chat messages with the time they arrived: {String message, Long millis}, oldest first (Play HUD). */
+    static List<Object[]> recentChat(int n) {
+        synchronized (RECENT) {
+            int from = Math.max(0, RECENT.size() - n);
+            return new java.util.ArrayList<Object[]>(RECENT.subList(from, RECENT.size()));
+        }
     }
 
     static String chatText() {

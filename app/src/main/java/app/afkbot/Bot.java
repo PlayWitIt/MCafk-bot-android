@@ -165,6 +165,11 @@ final class Bot {
     private long nextJumpAt, joinedAt;
     private String serverLabel = "";
 
+    /** The live settings this bot runs with (Play mode adjusts the view distance while it's open). */
+    Config config() {
+        return cfg;
+    }
+
     Bot(Config cfg, SessionSource sessions) {
         this.cfg = cfg;
         this.sessions = sessions;
@@ -1253,6 +1258,27 @@ final class Bot {
     }
 
     /** Clicks a slot in the open container. mode 1 + button 0 = shift-click (moves the stack across). */
+    /** Clicks a slot of your own inventory (window 0; 9-35 main, 36-44 hotbar). mode 2 + button n = swap with hotbar n. */
+    void clickInventory(final int slot, final int button, final int mode) {
+        final ScheduledExecutorService t = ticker;
+        if (t == null || state != PLAY || Inv.openId >= 0) return;
+        t.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Buf b = new Buf(id(Proto.P_S_WINDOW_CLICK));
+                    writeContainerId(b, 0);
+                    b.varInt(Inv.stateId).u16(slot).u8(button).varInt(mode).varInt(0);
+                    if (proto >= 770) b.bool(false);
+                    else if (proto >= 766) b.varInt(0);
+                    else b.bool(false);
+                    send(b);
+                } catch (IOException ignored) {
+                }
+            }
+        });
+    }
+
     void clickSlot(final int slot, final int button, final int mode) {
         final ScheduledExecutorService t = ticker;
         final int wid = Inv.openId;

@@ -12,7 +12,7 @@ CP=$LIB/json.jar:$LIB/rhino.jar
 S=app/src/main/java/app/afkbot
 rm -rf $OUT && mkdir -p $OUT
 javac -nowarn -encoding UTF-8 --release 8 -cp $CP -d $OUT $(find desktop/stubs -name '*.java') \
-  $S/{Bot,Buf,Text,Proto,Hub,World,MapData,ModEngine,ProtoDef,Inv,Shapes,Auth,RemoteZip,TexturePack,GameState,GameLight,GameMesher,GameAssets,GameAtlas,GameModels}.java desktop/src/app/afkbot/*.java 2>&1 \
+  $S/{Bot,Buf,Text,Proto,Hub,World,MapData,ModEngine,ProtoDef,Inv,Shapes,Auth,RemoteZip,TexturePack,GameState,GameLight,GameMesher,GameAssets,GameAtlas,GameModels,GameIcons}.java desktop/src/app/afkbot/*.java 2>&1 \
   | grep -v "^Note:\|warning\|^[0-9]* warning" || true
 mode=${1:-live}; shift || true
 case "$mode" in

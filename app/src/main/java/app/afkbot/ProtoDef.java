@@ -316,6 +316,7 @@ final class ProtoDef {
         final ProtoDef def;
         final JSONObject packets;
         final String[] itemNames;
+        final String[] itemIds; // internal names, null for data generated before they were added
         final int[] blockMin;
         final String[] blockNames;
         final int[] shapes; // collision/outline shape type per block (see Shapes)
@@ -335,6 +336,11 @@ final class ProtoDef {
             JSONArray n = root.getJSONArray("items");
             itemNames = new String[n.length()];
             for (int i = 0; i < n.length(); i++) itemNames[i] = n.getString(i);
+            JSONArray iid = root.optJSONArray("itemIds");
+            if (iid != null) {
+                itemIds = new String[iid.length()];
+                for (int i = 0; i < iid.length(); i++) itemIds[i] = iid.getString(i);
+            } else itemIds = null;
             JSONArray bm = root.optJSONArray("blockMin"), bn = root.optJSONArray("blockNames");
             int k = bm == null || bn == null ? 0 : Math.min(bm.length(), bn.length());
             blockMin = new int[k];
@@ -430,6 +436,11 @@ final class ProtoDef {
             } catch (org.json.JSONException e) {
                 throw new IOException(e.getMessage());
             }
+        }
+
+        /** Internal item name ("diamond_sword"), or "" if unknown. */
+        String itemId(int id) {
+            return itemIds != null && id >= 0 && id < itemIds.length ? itemIds[id] : "";
         }
 
         String itemName(int id) {

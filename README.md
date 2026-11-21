@@ -22,6 +22,7 @@ Get **AFKBot.apk** from the [latest release](../../releases/tag/latest) and open
 - **3D view** tab (off by default): real Minecraft block textures (downloaded from Mojang on first use, ~1.2 MB via partial downloads; nothing from Mojang is bundled), left click (mine / hit) and right click (use / place / interact), hotbar; first-person or orbit camera, shaded blocks with ambient occlusion, players with name tags;
   **Drive** mode with joystick, jump, sneak and sprint (vanilla-style physics and collisions); tap a block to select it and
   **open chests/barrels/shulkers**, see their contents and take items; inventory viewer. Uses the GPU only while open.
+- **Play (experimental)**: the full game view, built into the app and driven over the bot's own connection: landscape and fullscreen, the game's real block models and textures (downloaded from Mojang on first use, about 3 MB), smooth lighting with day and night, and the game's HUD (hotbar with item icons, hearts, hunger, XP, chat). Touch controls: a floating stick to move (push all the way to sprint), drag to look, tap to use or place, hold to break, plus jump/sneak, inventory and container screens and a pause menu with render distance, FOV and sensitivity. The light 3D tab stays as the low-power quick view.
 - **Mods**: JavaScript add-ons (sandboxed) installed from examples, a file, pasted code or a link — see [MODS.md](MODS.md)
 - **Chat**: read server and player chat; send messages and /commands
 - **Alerts**: phone notifications for kicks, disconnects, deaths, players nearby and safety logouts

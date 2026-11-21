@@ -348,6 +348,8 @@ public class MainActivity extends Activity implements Hub.Listener {
         });
         hero.addView(startStop);
 
+        buildPlayCard(col);
+
         LinearLayout grid1 = row(col);
         statHealth = tile(grid1, "Health");
         statNearest = tile(grid1, "Nearest player");
@@ -388,6 +390,46 @@ public class MainActivity extends Activity implements Hub.Listener {
         recent.setPadding(0, dp(6), 0, 0);
         ac.addView(recent);
         return scroll(col);
+    }
+
+    // ---------------------------------------------------------------- Play (experimental): the full game view
+
+    private void buildPlayCard(LinearLayout col) {
+        LinearLayout c = card(col);
+        LinearLayout head = row(c);
+        View icon = new View(this);
+        icon.setBackground(new android.graphics.drawable.LayerDrawable(new android.graphics.drawable.Drawable[]{
+                gradient(ACCENT, ACCENT2, dp(12)), new android.graphics.drawable.InsetDrawable(new Icons(Icons.CUBE, Color.WHITE), dp(9))}));
+        head.addView(icon, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        LinearLayout titles = new LinearLayout(this);
+        titles.setOrientation(LinearLayout.VERTICAL);
+        titles.setPadding(dp(12), 0, 0, 0);
+        LinearLayout tr = new LinearLayout(this);
+        tr.setGravity(Gravity.CENTER_VERTICAL);
+        tr.addView(text("Play", 16, TEXT, true));
+        TextView badge = text("EXPERIMENTAL", 9, WARN, true);
+        badge.setPadding(dp(6), dp(1), dp(6), dp(1));
+        badge.setBackground(round((WARN & 0x00FFFFFF) | 0x22000000, dp(6), (WARN & 0x00FFFFFF) | 0x88000000));
+        LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        bl.leftMargin = dp(8);
+        tr.addView(badge, bl);
+        titles.addView(tr);
+        titles.addView(text("The full game view: walk, mine, build and chat in landscape, with real block models, lighting and the game's HUD. "
+                + "Uses the bot's connection; first start downloads about 3 MB of game files from Mojang.", 12, MUTED, false));
+        head.addView(titles, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        Button play = smallButton("Play", ACCENT);
+        play.setMinimumHeight(dp(48));
+        play.setBackground(gradient(ACCENT, ACCENT2, dp(12)));
+        c.addView(play);
+        play.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                if (!Hub.running || !World.inWorld) {
+                    toast(Hub.running ? "Still joining - try again in a moment" : "Start AFK first - Play mode uses the bot's connection");
+                    return;
+                }
+                startActivity(new Intent(MainActivity.this, GameActivity.class));
+            }
+        });
     }
 
     private TextView tile(LinearLayout parent, String name) {

@@ -28,6 +28,15 @@
             </intent-filter>
         </activity>
 
+        <!-- Play mode (experimental): the full game view, landscape and fullscreen -->
+        <activity
+            android:name=".GameActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|uiMode|smallestScreenSize|navigation"
+            android:exported="false"
+            android:screenOrientation="sensorLandscape"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
+            android:windowSoftInputMode="adjustNothing" />
+
         <service
             android:name=".AfkService"
             android:exported="false"
