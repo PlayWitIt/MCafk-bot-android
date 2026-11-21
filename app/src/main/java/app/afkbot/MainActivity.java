@@ -2104,6 +2104,14 @@ public class MainActivity extends Activity implements Hub.Listener {
         });
         c.addView(text("Small JavaScript add-ons that react to chat, players, health and more. They run sandboxed: no files, no internet, and a broken mod is switched off automatically.", 12, MUTED, false));
         LinearLayout r1 = chipRow(c);
+        actionChip(r1, "Add-ons", new Runnable() {
+            public void run() {
+                showAddons();
+            }
+        });
+        TextView addons = (TextView) r1.getChildAt(r1.getChildCount() - 1);
+        addons.setTextColor(Color.WHITE);
+        addons.setBackground(gradient(ACCENT, ACCENT2, dp(20)));
         actionChip(r1, "Examples", new Runnable() {
             public void run() {
                 showExamples();
@@ -2273,6 +2281,47 @@ public class MainActivity extends Activity implements Hub.Listener {
             toast("Couldn't install: " + e.getMessage());
         }
         refreshModsSoon();
+    }
+
+    /** Add-ons that live in their own repos: one tap downloads and installs (or updates) them. {name, what it does, link}. */
+    private static final String[][] ADDONS = {
+            {"Harvest Hand", "Harvests and replants your whole farm, with your Fortune tool; stores in chests and shulker boxes. By PlayWit Creations.",
+                    "https://raw.githubusercontent.com/PlayWitIt/harvest-hand-afk/main/harvesthand.js"},
+    };
+
+    private void showAddons() {
+        String[] labels = new String[ADDONS.length];
+        for (int i = 0; i < ADDONS.length; i++) {
+            boolean have = ModEngine.get(ModStore.slug(ADDONS[i][0])) != null;
+            labels[i] = ADDONS[i][0] + (have ? "  (installed: tap to update)" : "") + "\n" + ADDONS[i][1];
+        }
+        new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle("Add-ons")
+                .setItems(labels, new android.content.DialogInterface.OnClickListener() {
+                    public void onClick(android.content.DialogInterface d, final int which) {
+                        toast("Downloading " + ADDONS[which][0] + "...");
+                        new Thread(new Runnable() {
+                            public void run() {
+                                try {
+                                    final String code = ModStore.download(ADDONS[which][2]);
+                                    ui.post(new Runnable() {
+                                        public void run() {
+                                            installMod(code); // replaces an older copy; its settings and saved data stay
+                                        }
+                                    });
+                                } catch (final Exception ex) {
+                                    ui.post(new Runnable() {
+                                        public void run() {
+                                            toast("Download failed: " + ex.getMessage());
+                                        }
+                                    });
+                                }
+                            }
+                        }).start();
+                    }
+                })
+                .setNegativeButton("Close", null)
+                .show();
     }
 
     private void showExamples() {
