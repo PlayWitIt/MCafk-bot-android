@@ -146,11 +146,34 @@ final class Auth {
     static Session signIn(Context c, Cancel cancel) throws Exception {
         JSONObject dc = new JSONObject(post("https://login.live.com/oauth20_connect.srf", form(
                 "client_id", CLIENT_ID, "scope", SCOPE, "response_type", "device_code"), "application/x-www-form-urlencoded", null));
-        String userCode = dc.getString("user_code");
-        String deviceCode = dc.getString("device_code");
-        String verify = dc.optString("verification_uri", "https://www.microsoft.com/link");
-        int interval = Math.max(1, dc.optInt("interval", 5));
-        long expires = System.currentTimeMillis() + dc.optInt("expires_in", 900) * 1000L;
+        // Kept, so if Android closes the app while you're in the browser, it carries on waiting when you come back.
+        prefs(c).edit().putString("dc_device", dc.getString("device_code")).putString("dc_user", dc.getString("user_code"))
+                .putString("dc_verify", dc.optString("verification_uri", "https://www.microsoft.com/link"))
+                .putInt("dc_interval", Math.max(1, dc.optInt("interval", 5)))
+                .putLong("dc_expires", System.currentTimeMillis() + dc.optInt("expires_in", 900) * 1000L).commit();
+        return waitForCode(c, cancel);
+    }
+
+    /** A code sign-in that was waiting when the app was closed, and hasn't expired: its code, or null. */
+    static String pendingCode(Context c) {
+        SharedPreferences p = prefs(c);
+        if (p.getLong("dc_expires", 0) < System.currentTimeMillis() + 5000) return null;
+        return p.getString("dc_user", null);
+    }
+
+    private static void clearPending(Context c) {
+        prefs(c).edit().remove("dc_device").remove("dc_user").remove("dc_verify").remove("dc_interval").remove("dc_expires").commit();
+    }
+
+    /** Waits for you to enter the saved code at microsoft.com/link, then signs in. */
+    static Session waitForCode(Context c, Cancel cancel) throws Exception {
+        SharedPreferences pp = prefs(c);
+        String userCode = pp.getString("dc_user", null);
+        String deviceCode = pp.getString("dc_device", null);
+        if (userCode == null || deviceCode == null) throw new AuthException("No sign-in code waiting");
+        String verify = pp.getString("dc_verify", "https://www.microsoft.com/link");
+        int interval = pp.getInt("dc_interval", 5);
+        long expires = pp.getLong("dc_expires", 0);
         Hub.authCode = userCode;
         Hub.authUrl = verify;
         Hub.log("Sign-in code: " + userCode + "  (enter it at " + verify + ")");
@@ -159,7 +182,10 @@ final class Auth {
         try {
             while (System.currentTimeMillis() < expires) {
                 pause(interval * 1000L);
-                if (cancel != null && cancel.cancelled()) throw new AuthException("Sign-in cancelled");
+                if (cancel != null && cancel.cancelled()) {
+                    clearPending(c);
+                    throw new AuthException("Sign-in cancelled");
+                }
                 Resp r;
                 try {
                     r = request("POST", "https://login.live.com/oauth20_token.srf?client_id=" + CLIENT_ID, form(
@@ -182,9 +208,11 @@ final class Auth {
                         interval += 5;
                         continue;
                     }
+                    clearPending(c);
                     throw new AuthException("Microsoft sign-in failed: " + j.optString("error_description", e));
                 }
                 if (!j.has("access_token")) throw new AuthException("Microsoft replied without a token (HTTP " + r.code + ")");
+                clearPending(c); // the code is used up
                 Hub.authCode = null;
                 Hub.log("Step 1/4 OK: Microsoft account accepted");
                 Hub.fire();
@@ -198,6 +226,7 @@ final class Auth {
                     }
                 }
             }
+            clearPending(c);
             throw new AuthException("Sign-in code expired, try again");
         } finally {
             Hub.authCode = null;

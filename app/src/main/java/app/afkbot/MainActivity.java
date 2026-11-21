@@ -167,6 +167,7 @@ public class MainActivity extends Activity implements Hub.Listener {
         resumed = true;
         Hub.addListener(this);
         Auth.wake();
+        if (signInThread == null && Auth.pendingCode(this) != null && Auth.signedInName(this) == null) resumeCodeSignIn();
         onChange();
         update3dLifecycle();
         ui.post(radarTick);
@@ -3375,10 +3376,9 @@ public class MainActivity extends Activity implements Hub.Listener {
     }
 
     @android.annotation.SuppressLint("SetJavaScriptEnabled")
-    private void openWebPage(String url, String subtitle, boolean forCode) {
+    private void openWebPage(final String url, String subtitle, boolean forCode) {
         closePrivateSignIn();
         pageForCode = forCode;
-        forgetWebSignIns();
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setBackgroundColor(BG);
@@ -3390,6 +3390,8 @@ public class MainActivity extends Activity implements Hub.Listener {
         titles.setOrientation(LinearLayout.VERTICAL);
         titles.addView(text("Microsoft sign-in" + (Slot.current() > 0 || Slot.exists(this, 1) || Slot.exists(this, 2) || Slot.exists(this, 3) ? " · Bot " + (Slot.current() + 1) : ""), 15, TEXT, true));
         titles.addView(text(subtitle, 12, MUTED, false));
+        final TextView loading = text("Loading Microsoft's sign-in page...", 12, ACCENT2, false);
+        titles.addView(loading);
         bar.addView(titles, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         Button close = smallButton("Close", SURFACE2);
         bar.addView(close);
@@ -3398,8 +3400,29 @@ public class MainActivity extends Activity implements Hub.Listener {
         android.webkit.WebSettings ws = web.getSettings();
         ws.setJavaScriptEnabled(true); // Microsoft's sign-in needs it
         ws.setDomStorageEnabled(true);
+        ws.setDatabaseEnabled(true);
         ws.setSaveFormData(false);
+        ws.setLoadWithOverviewMode(true);
+        ws.setUseWideViewPort(true);
+        web.setBackgroundColor(Color.WHITE);
+        android.webkit.CookieManager.getInstance().setAcceptCookie(true);
+        android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(web, true);
+        web.setWebChromeClient(new android.webkit.WebChromeClient() {
+            @Override
+            public void onProgressChanged(android.webkit.WebView v, int p) {
+                loading.setVisibility(p >= 100 ? View.GONE : View.VISIBLE);
+            }
+        });
         web.setWebViewClient(new android.webkit.WebViewClient() {
+            @Override
+            public void onReceivedError(android.webkit.WebView v, android.webkit.WebResourceRequest r, android.webkit.WebResourceError e) {
+                if (r.isForMainFrame()) {
+                    loading.setText("Couldn't load the page: " + e.getDescription() + ". Check your connection, close and try again.");
+                    loading.setTextColor(BAD);
+                    loading.setVisibility(View.VISIBLE);
+                }
+            }
+
             @Override
             public boolean shouldOverrideUrlLoading(android.webkit.WebView v, android.webkit.WebResourceRequest r) {
                 if (loginRedirect(r.getUrl().toString())) return true;
@@ -3434,7 +3457,14 @@ public class MainActivity extends Activity implements Hub.Listener {
         signInDialog = d;
         signInWeb = web;
         d.show();
-        web.loadUrl(url);
+        if (d.getWindow() != null) d.getWindow().setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+        // a clean start (no saved sign-ins), then the page: clearing while it loads would break it
+        android.webkit.WebStorage.getInstance().deleteAllData();
+        android.webkit.CookieManager.getInstance().removeAllCookies(new android.webkit.ValueCallback<Boolean>() {
+            public void onReceiveValue(Boolean ok) {
+                if (signInWeb == web) web.loadUrl(url);
+            }
+        });
     }
 
     @Override
@@ -3445,6 +3475,36 @@ public class MainActivity extends Activity implements Hub.Listener {
 
     private void closePrivateSignIn() {
         if (signInDialog != null) signInDialog.dismiss();
+    }
+
+    /** Android closed the app while you were entering the code: carry on waiting for it. */
+    private void resumeCodeSignIn() {
+        cancelSignIn = false;
+        Hub.authError = null;
+        Hub.log("Waiting for the code to be entered...");
+        final android.content.Context ctx = getApplicationContext();
+        Thread t = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Auth.waitForCode(ctx, new Auth.Cancel() {
+                        @Override
+                        public boolean cancelled() {
+                            return cancelSignIn;
+                        }
+                    });
+                } catch (Exception e) {
+                    String m = e.getMessage() != null ? e.getMessage() : e.toString();
+                    Hub.authError = m;
+                    Hub.log("Sign-in failed: " + m);
+                } finally {
+                    signInThread = null;
+                    Hub.fire();
+                }
+            }
+        }, "sign-in");
+        signInThread = t;
+        t.start();
     }
 
     private void startSignIn() {
