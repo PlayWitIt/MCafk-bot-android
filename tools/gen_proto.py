@@ -96,6 +96,7 @@ SPEC=[
  ('P_C_GAME_STATE','play','toClient',['game_state_change']),
  ('P_C_BREAK_ANIM','play','toClient',['block_break_animation']),
  ('P_C_ENTITY_METADATA','play','toClient',['entity_metadata']),
+ ('P_C_PROFILELESS_CHAT','play','toClient',['profileless_chat','disguised_chat']),
 ]
 
 # ---- map colours (approximate, like a vanilla map) ----

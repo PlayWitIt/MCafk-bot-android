@@ -45,9 +45,12 @@ public class MainActivity extends Activity implements Hub.Listener {
             TEXT = 0xFFE8EAF0, MUTED = 0xFF8A93A6, ACCENT = 0xFF8B5CF6, ACCENT2 = 0xFF22D3EE,
             GOOD = 0xFF34D399, BAD = 0xFFF87171, WARN = 0xFFFBBF24;
 
-    private static final String[] TABS = {"Home", "Map", "3D", "Modules", "Chat", "Account"};
-    private static final int[] TAB_ICONS = {Icons.HOME, Icons.MAP, Icons.CUBE, Icons.MODULES, Icons.CHAT, Icons.ACCOUNT};
-    static final int T_HOME = 0, T_MAP = 1, T_3D = 2, T_MODULES = 3, T_CHAT = 4, T_ACCOUNT = 5;
+    private static final String[] TABS = {"Home", "Map", "3D", "Modules", "Chat", "Account", "NoN"};
+    private static final int[] TAB_ICONS = {Icons.HOME, Icons.MAP, Icons.CUBE, Icons.MODULES, Icons.CHAT, Icons.ACCOUNT, Icons.EYE};
+    static final int T_HOME = 0, T_MAP = 1, T_3D = 2, T_MODULES = 3, T_CHAT = 4, T_ACCOUNT = 5, T_NON = 6;
+    /** The Naughty or Nice add-on's tab (shown only while the add-on is on in Modules). */
+    private NonPage nonPage;
+    private View nonNavItem;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private FrameLayout pages;
@@ -213,6 +216,8 @@ public class MainActivity extends Activity implements Hub.Listener {
         pageViews[3] = buildModules();
         pageViews[4] = buildChat();
         pageViews[5] = buildAccount();
+        nonPage = new NonPage(this);
+        pageViews[T_NON] = nonPage.view();
         for (View v : pageViews) pages.addView(v);
 
         // bottom navigation
@@ -248,7 +253,9 @@ public class MainActivity extends Activity implements Hub.Listener {
                 }
             });
             nav.addView(item, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+            if (i == T_NON) nonNavItem = item;
         }
+        nonNavItem.setVisibility(NonIntel.installed ? View.VISIBLE : View.GONE);
         root.addView(nav);
         final int navPad = dp(8);
         final LinearLayout navRef = nav;
@@ -300,6 +307,8 @@ public class MainActivity extends Activity implements Hub.Listener {
             tabIconDrawables[k].setColor(sel ? Color.WHITE : MUTED);
             tabIcons[k].setBackground(sel ? round((ACCENT & 0x00FFFFFF) | 0x55000000, dp(15), 0) : null);
         }
+        if (i == T_NON) nonPage.onShown();
+        else nonPage.onHidden();
         onChange();
         update3dLifecycle();
         if (resumed) {
@@ -1561,6 +1570,21 @@ public class MainActivity extends Activity implements Hub.Listener {
         col.addView(text("Modules", 22, TEXT, true));
         col.addView(text("Changes apply right away, even while connected.", 13, MUTED, false));
         buildModsSection(col);
+        TextView ao = text("Add-ons", 16, TEXT, true);
+        ao.setPadding(dp(2), dp(18), 0, 0);
+        col.addView(ao);
+        module(col, "Naughty or Nice", "Player intel while you're AFK, in its own NoN tab: your lists and groups (Friend, Nice, Look Into, Naughty), who joins, "
+                + "leaves and comes near and where, coordinates posted in chat, your name mentioned, and whispers as DMs you can answer. "
+                + "Phone alerts for Naughty players and whispers. Import your lists from the PC mod.", NonIntel.installed, new Toggle() {
+            public void set(boolean v) {
+                NonIntel.installed = v;
+                NonIntel.saveSettings();
+                if (v && World.inWorld && Hub.bot != null) NonIntel.startNow(cfg.address, World.names());
+                nonNavItem.setVisibility(v ? View.VISIBLE : View.GONE);
+                if (!v && tab == T_NON) selectTab(T_MODULES);
+                toast(v ? "Naughty or Nice is on: see the NoN tab" : "Naughty or Nice is off (its data is kept)");
+            }
+        });
         TextView bi = text("Built-in modules", 16, TEXT, true);
         bi.setPadding(dp(2), dp(18), 0, 0);
         col.addView(bi);
@@ -2685,7 +2709,13 @@ public class MainActivity extends Activity implements Hub.Listener {
             StringBuilder sb = new StringBuilder();
             for (String l : Hub.recentLog(7)) sb.append(l).append('\n');
             recent.setText(sb.length() == 0 ? "Nothing yet." : sb.toString().trim());
-        } else if (tab == T_MODULES) {
+        }
+        if (nonNavItem != null && NonIntel.installed) {
+            int unread = NonIntel.unread();
+            tabLabels[T_NON].setText(unread > 0 ? "NoN " + unread : "NoN");
+            tabLabels[T_NON].setTextColor(unread > 0 ? NonPage.WHISPER : tab == T_NON ? TEXT : MUTED);
+        }
+        if (tab == T_MODULES) {
             if (ModEngine.version != shownModsVersion) refreshMods();
         } else if (tab == T_CHAT) {
             int v = Hub.chatVersion;

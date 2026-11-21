@@ -814,6 +814,7 @@ final class Bot {
                     p.bool();
                     p.bool();
                     onDimension(p);
+                    readSecureChat(p);
                 } catch (IOException ignored) {
                     MapData.setDimension("");
                 }
@@ -1054,6 +1055,8 @@ final class Bot {
             for (int i = 0; i < n; i++) World.removeName(p.uuid());
         } else if (pid == id(Proto.P_C_PLAYER_CHAT)) {
             readPlayerChat(p);
+        } else if (pid == id(Proto.P_C_PROFILELESS_CHAT)) {
+            readProfilelessChat(p);
         } else if (pid == id(Proto.P_C_BLOCK_CHANGE)) {
             long v = p.i64();
             int bx = (int) (v >> 38), by = (int) (v << 52 >> 52), bz = (int) (v << 26 >> 38);
@@ -1607,12 +1610,14 @@ final class Bot {
         try {
             JSONObject o = new JSONObject().put("message", message).put("raw", raw).put("system", system);
             if (sender != null) o.put("sender", sender);
+            NonIntel.chat(sender, message, raw, system);
             ModEngine.emit("chat", o);
         } catch (org.json.JSONException ignored) {
         }
     }
 
     private static void emitMod(String event, String key, Object value) {
+        NonIntel.botEvent(event, value == null ? null : String.valueOf(value));
         try {
             ModEngine.emit(event, new JSONObject().put(key, value));
         } catch (org.json.JSONException ignored) {
@@ -1621,6 +1626,35 @@ final class Bot {
 
     String playerName() {
         return playerName;
+    }
+
+    /**
+     * Whether the server enforces secure (signed) chat. Then a command with a message in it (/w, /msg) sent unsigned,
+     * as this bot sends commands, gets you kicked; the Naughty or Nice add-on won't send whispers there.
+     */
+    volatile boolean secureChat;
+
+    /** The rest of the 1.20.5+ login packet after the dimension, up to its last field: "enforces secure chat". */
+    private void readSecureChat(Buf.In p) {
+        secureChat = false;
+        if (proto < 766) return;
+        try {
+            p.i64(); // hashed seed
+            p.u8(); // game mode
+            p.u8(); // previous game mode
+            p.bool(); // debug
+            p.bool(); // flat
+            if (p.bool()) { // death location
+                p.str();
+                p.i64();
+            }
+            p.varInt(); // portal cooldown
+            if (proto >= 768) p.varInt(); // sea level
+            secureChat = p.bool();
+            if (secureChat) Hub.log("This server enforces secure chat: whispers can't be sent from the app here (it would get you kicked).");
+        } catch (IOException | RuntimeException e) {
+            secureChat = false;
+        }
     }
 
     /** Reads the dimension part of the login/respawn packet. */
@@ -1642,6 +1676,7 @@ final class Bot {
         String name = World.label(e);
         boolean friend = cfg.friendSet().contains(name);
         double d = distanceTo(e);
+        NonIntel.seen(name, e.x, e.y, e.z, d, World.dimension);
         try {
             ModEngine.emit("playerEnter", new JSONObject().put("name", name).put("distance", Math.round(d)).put("friend", friend));
         } catch (org.json.JSONException ignored) {
@@ -1724,8 +1759,68 @@ final class Bot {
         if (p.bool()) p.bytes(256);
         String msg = p.str();
         String name = World.nameOf(sender);
+        // 1.20.5+: the rest says what kind of message it is. Whispers (/w, /msg) are kinds of their own: vanilla numbers
+        // its chat kinds chat, emote, msg incoming (3), msg outgoing (4)..., and an outgoing one names who it went to.
+        int kind = -1;
+        String target = null;
+        if (proto >= 766) {
+            try {
+                p.i64(); // timestamp
+                p.i64(); // salt
+                int prev = p.varInt();
+                for (int i = 0; i < prev; i++) if (p.varInt() == 0) p.bytes(256);
+                if (p.bool()) Text.fromNbt(p); // unsigned content
+                if (p.varInt() == 2) { // partly filtered: a bit set
+                    int longs = p.varInt();
+                    for (int i = 0; i < longs; i++) p.i64();
+                }
+                kind = p.varInt();
+                if (kind != 0) {
+                    Text.fromNbt(p); // sender's display name
+                    if (p.bool()) target = Text.strip(Text.fromNbt(p)).trim();
+                }
+            } catch (IOException | RuntimeException e) {
+                kind = -1;
+            }
+        }
+        // Handed on as "X whispers to you: …" / "You whisper to X: …", which the Naughty or Nice add-on reads as DMs.
+        if (name != null && kind == 3 && target == null) {
+            Hub.chat(name + " whispers to you: " + msg);
+            emitChat(null, name + " whispers to you: " + msg, name + " whispers to you: " + msg, false);
+            return;
+        }
+        if (kind == 4 && target != null && !target.isEmpty()) {
+            Hub.chat("You whisper to " + target + ": " + msg);
+            emitChat(null, "You whisper to " + target + ": " + msg, "You whisper to " + target + ": " + msg, false);
+            return;
+        }
         Hub.chat((name != null ? "<" + name + "> " : "<?> ") + msg);
         emitChat(name, msg, (name != null ? "<" + name + "> " : "") + msg, false);
+    }
+
+    /**
+     * Chat that isn't signed (a server's /say, or a whisper whose text wasn't signed, as on servers without secure
+     * chat): the text, its kind, who it's from and (for whispers you sent) who to.
+     */
+    private void readProfilelessChat(Buf.In p) throws IOException {
+        String msg = Text.strip(proto >= 765 ? Text.fromNbt(p) : Text.fromJson(p.str())).trim();
+        int kind = p.varInt();
+        // Before 1.20.5 the kind is the registry id itself; after, it's the id plus one (0 would be a kind spelled out).
+        if (proto < 766) kind++;
+        String name = null, target = null;
+        if (kind != 0) {
+            name = Text.strip(proto >= 765 ? Text.fromNbt(p) : Text.fromJson(p.str())).trim();
+            if (p.bool()) target = Text.strip(proto >= 765 ? Text.fromNbt(p) : Text.fromJson(p.str())).trim();
+        }
+        String line;
+        if (kind == 3 && name != null && !name.isEmpty() && target == null) line = name + " whispers to you: " + msg;
+        else if (kind == 4 && target != null && !target.isEmpty()) line = "You whisper to " + target + ": " + msg;
+        else if (kind == 1 && name != null && !name.isEmpty()) line = "<" + name + "> " + msg;
+        else line = (name != null && !name.isEmpty() ? "[" + name + "] " : "") + msg;
+        if (line.length() > 400) line = line.substring(0, 400) + "...";
+        Hub.chat(line);
+        if (kind == 1 && name != null && !name.isEmpty()) emitChat(name, msg, line, false);
+        else emitChat(null, line, line, true);
     }
 
     private void updateNearest() {
@@ -2008,7 +2103,10 @@ final class Bot {
         // 1.21.2+ clients end every tick with this packet; anticheats use it to line up movement
         if (proto >= 768 && id(Proto.P_S_TICK_END) >= 0) send(new Buf(id(Proto.P_S_TICK_END)));
         if (detail) updateDetail();
-        if (tick % 20 == 0) ModEngine.emit("second", null);
+        if (tick % 20 == 0) {
+            ModEngine.emit("second", null);
+            if (NonIntel.installed) NonIntel.second(World.snapshot(null));
+        }
         if (tick % 200 == 0) MapData.trim(World.selfX, World.selfZ, Math.max(cfg.viewDistance, Hub.serverViewDistance) + 3);
     }
 
@@ -2556,7 +2654,7 @@ final class Bot {
                 Proto.P_C_START_CONFIG, Proto.P_C_HEALTH, Proto.P_C_SYSTEM_CHAT, Proto.P_C_RESOURCE_PACK, Proto.P_C_COOKIE_REQ,
                 Proto.P_C_SPAWN_ENTITY, Proto.P_C_SPAWN_PLAYER, Proto.P_C_SPAWN_LIVING, Proto.P_C_ENTITY_DESTROY,
                 Proto.P_C_REL_MOVE, Proto.P_C_MOVE_LOOK, Proto.P_C_ENTITY_TELEPORT, Proto.P_C_ENTITY_SYNC, Proto.P_C_RESPAWN,
-                Proto.P_C_PLAYER_INFO, Proto.P_C_PLAYER_REMOVE, Proto.P_C_PLAYER_CHAT};
+                Proto.P_C_PLAYER_INFO, Proto.P_C_PLAYER_REMOVE, Proto.P_C_PLAYER_CHAT, Proto.P_C_PROFILELESS_CHAT};
         for (int k : want) if (ids[k] == pid) return true;
         if (MapData.supported && (pid == id(Proto.P_C_MAP_CHUNK) || pid == id(Proto.P_C_UNLOAD_CHUNK))) return true;
         // only decoded while the Play screen is open (keeps the AFK bot as light as before)

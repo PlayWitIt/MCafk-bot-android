@@ -32,6 +32,14 @@ every move against vanilla physics, so anything not bit-exact gets set back.
    - Light data and the extra packets only exist while the Play screen is open (`MapData.keepLight`, `GameState.open`).
    - It has not been seen on a real phone yet.
 
+4. **Naughty or Nice add-on (2026-11-21):** `NonIntel.java` (logic, pure Java, desktop-testable) and `NonPage.java` (the NoN tab).
+   Switched on in Modules → Add-ons; tab index `T_NON` is hidden while off. Hooks: `World.putName/removeName`, `Bot.emitChat`,
+   `Bot.emitMod` (join/leave/kicked/playerLeave), `Bot.onPlayerSeen`, the per-second tick, `ModStore.init` (data in files/non/).
+   Whispers: `readPlayerChat` now reads the whole 1.20.5+ packet and `readProfilelessChat` handles `profileless_chat`; chat kind 3 =
+   whisper to you, 4 = whisper you sent (with target), verified on vanilla 1.21.11. `Bot.secureChat` is the login packet's last field;
+   the add-on refuses to send `/w` when it's true (an unsigned command with a message argument gets you kicked there).
+   Tests: `desktop/run.sh non` (24 logic checks, no server) and `desktop/run.sh nonlive` (8 checks against the local server).
+
 Commits are authored as "PlayWit Creations". Don't add tool attribution or co-author lines anywhere.
 
 On the PC you can run the **app's real bot code** against Constantiam with the user's account. That's what

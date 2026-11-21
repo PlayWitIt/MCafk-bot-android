@@ -14,7 +14,7 @@ import android.graphics.drawable.Drawable;
  */
 final class Icons extends Drawable {
     static final int HOME = 0, MAP = 1, CUBE = 2, MODULES = 3, CHAT = 4, ACCOUNT = 5, FULLSCREEN = 6,
-            EXIT_FULLSCREEN = 7, RECENTER = 8, PLUS = 9, MINUS = 10, CLOSE = 11, HAND = 12, SEND = 13;
+            EXIT_FULLSCREEN = 7, RECENTER = 8, PLUS = 9, MINUS = 10, CLOSE = 11, HAND = 12, SEND = 13, EYE = 14;
 
     private final int kind;
     private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -180,6 +180,13 @@ final class Icons extends Drawable {
                 path.close();
                 path.moveTo(11f, 13f);
                 path.lineTo(20.5f, 4f);
+                break;
+            case EYE: // an eye: Naughty or Nice's intel
+                path.moveTo(2.5f, 12f);
+                path.quadTo(12f, 2.5f, 21.5f, 12f);
+                path.quadTo(12f, 21.5f, 2.5f, 12f);
+                path.close();
+                path.addCircle(12f, 12f, 3.2f, Path.Direction.CW);
                 break;
             default:
                 break;

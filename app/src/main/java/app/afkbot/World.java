@@ -142,11 +142,18 @@ final class World {
     static synchronized void putName(UUID u, String name) {
         NAMES.put(u, name);
         tabCount = NAMES.size();
+        NonIntel.tabAdd(u, name);
     }
 
     static synchronized void removeName(UUID u) {
         NAMES.remove(u);
         tabCount = NAMES.size();
+        NonIntel.tabRemove(u);
+    }
+
+    /** Everyone on the tab list, for an add-on switched on while connected. */
+    static synchronized Map<UUID, String> names() {
+        return new HashMap<UUID, String>(NAMES);
     }
 
     static synchronized String nameOf(UUID u) {

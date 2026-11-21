@@ -25,6 +25,13 @@ Get **AFKBot.apk** from the [latest release](../../releases/tag/latest) and open
 - **Play (experimental)**: the full game view, built into the app and driven over the bot's own connection: landscape and fullscreen, the game's real block models and textures (downloaded from Mojang on first use, about 3 MB), smooth lighting with day and night, and the game's HUD (hotbar with item icons, hearts, hunger, XP, chat). Touch controls: a floating stick to move (push all the way to sprint), drag to look, tap to use or place, hold to break, plus jump/sneak, inventory and container screens and a pause menu with render distance, FOV and sensitivity. The light 3D tab stays as the low-power quick view.
 - **Mods**: JavaScript add-ons (sandboxed) installed from examples, a file, pasted code or a link — see [MODS.md](MODS.md)
 - **Chat**: read server and player chat; send messages and /commands
+- **Naughty or Nice add-on** (switch it on in Modules → Add-ons; it adds a **NoN** tab): player intel while you're AFK, like the PC mod.
+  **People**: everyone who joins, leaves, comes near or talks, with your lists (★ Friend, ✔ Nice, ? Look Into, ✖ Naughty), groups (split by group, foldable),
+  notes, where and when they were last seen near you, time near you, and what they said. **DMs**: every whisper is a conversation; type and send, it goes
+  as `/w name …` for you (the command can be changed), with sending / not-sent marks. **Intel**: coordinates posted in chat, your name mentioned, Naughty and
+  Look Into players near you. **Log**: joins, leaves and sightings. Phone alerts for Naughty players joining or coming near, whispers and your name.
+  **Import** your lists, groups and notes from the PC mod with a share link (`NN2:…`) or code (`NN1:…`). Kept per server, on the phone only.
+  On servers that enforce secure chat it won't send whispers (an unsigned `/w` would get you kicked there); reading still works.
 - **Alerts**: phone notifications for kicks, disconnects, deaths, players nearby and safety logouts
 - Microsoft sign-in with a short code at microsoft.com/link (remembers you)
 - Supports Minecraft 1.12.2 and 1.20.2 - 26.1 (auto-detects the server version)
