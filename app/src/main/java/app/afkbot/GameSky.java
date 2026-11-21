@@ -216,8 +216,11 @@ final class GameSky {
         drawTex(q, 6);
     }
 
+    private FloatBuffer texBuf = ByteBuffer.allocateDirect(64 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer();
+
     private void drawTex(float[] q, int verts) {
-        FloatBuffer fb = ByteBuffer.allocateDirect(q.length * 4).order(ByteOrder.nativeOrder()).asFloatBuffer();
+        FloatBuffer fb = texBuf; // reused (no per-frame allocation)
+        fb.clear();
         fb.put(q).position(0);
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
         GLES20.glEnableVertexAttribArray(tPos);

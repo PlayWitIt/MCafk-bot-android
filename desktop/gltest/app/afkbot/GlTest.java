@@ -51,8 +51,6 @@ public class GlTest {
         PreviewTest.cmd("xp set Tester 12 levels");
         Thread.sleep(1200);
 
-        for (int[] p : new int[][]{{7, -60, 0}, {7, -60, -1}, {6, -60, -1}, {7, -61, -2}, {5, -60, -3}, {14, -59, 4}, {14, -59, 3}})
-            System.out.println("[GL] light at " + p[0] + "," + p[1] + "," + p[2] + " = " + Integer.toHexString(MapData.lightAt(p[0], p[1], p[2])) + " block " + Shapes.id(MapData.stateAt(p[0], p[1], p[2])));
         GlContext.create(W, H);
         GameRenderer r = new GameRenderer();
         hud = new GameHud(new android.content.Context(), r, new GameHud.Host() {
@@ -94,8 +92,17 @@ public class GlTest {
         shot(r, b, out + "/gl_close.png", 135, 28, 6000);
         PreviewTest.cmd("tp Tester 3 -60 -16 0 15");
         Thread.sleep(1500);
-        for (World.Dot d : World.snapshot(null)) System.out.println(String.format("[GL] entity %s kind %c type %s at %.1f %.1f %.1f yaw %.0f", d.label, d.kind, d.type, d.dx, d.dy, d.dz, d.yaw));
         for (int i = 0; i < 3; i++) { shot(r, b, out + "/gl_mobs.png", 0, 8, 6000); } // models download on first sight
+        java.util.Set<String> types = new java.util.TreeSet<String>();
+        for (World.Dot d : World.snapshot(null)) if (d.kind != 'i') types.add(d.type + "(" + d.kind + ")");
+        Thread.sleep(3000);
+        for (int w = 0; w < 20 && EntityModels.get("slime") == null; w++) Thread.sleep(500);
+        System.out.println("[GL] slime after waiting: " + (EntityModels.get("slime") != null));
+        for (String t : types) {
+            String ty = t.substring(0, t.indexOf('('));
+            EntityModels.Model m = EntityModels.get(ty);
+            System.out.println("[GL] present " + t + ": " + (m == null ? "no model" : "model ok"));
+        }
         PreviewTest.cmd("tp Tester 14.5 -59 5.4 180 25");
         Thread.sleep(1500);
         shot(r, b, out + "/gl_torch_room.png", 180, 25, 6000);

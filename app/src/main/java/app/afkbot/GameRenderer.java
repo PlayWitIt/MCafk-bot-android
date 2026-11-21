@@ -434,7 +434,10 @@ final class GameRenderer implements GLSurfaceView.Renderer, MapData.Changes {
                 GLES20.glGenBuffers(1, id, 0);
                 s.vbo[p] = id[0];
             }
-            ByteBuffer bb = ByteBuffer.allocateDirect(m.data[p].length).order(ByteOrder.nativeOrder());
+            if (uploadBuf == null || uploadBuf.capacity() < m.data[p].length)
+                uploadBuf = ByteBuffer.allocateDirect(Math.max(m.data[p].length, 256 * 1024)).order(ByteOrder.nativeOrder());
+            ByteBuffer bb = uploadBuf;
+            bb.clear();
             bb.put(m.data[p]).position(0);
             GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, s.vbo[p]);
             GLES20.glBufferData(GLES20.GL_ARRAY_BUFFER, m.data[p].length, bb, GLES20.GL_STATIC_DRAW);
@@ -466,6 +469,16 @@ final class GameRenderer implements GLSurfaceView.Renderer, MapData.Changes {
                 it.remove();
             }
         }
+    }
+
+    // reusable native buffers (allocating them every frame makes Android's garbage collector stutter)
+    private ByteBuffer scratch, uploadBuf;
+
+    /** A cleared direct buffer of at least n bytes, reused between draws (each draw consumes it right away). */
+    private ByteBuffer scratch(int n) {
+        if (scratch == null || scratch.capacity() < n) scratch = ByteBuffer.allocateDirect(Math.max(n, 64 * 1024)).order(ByteOrder.nativeOrder());
+        scratch.clear();
+        return scratch;
     }
 
     private int[] shownFrame = new int[0];
@@ -766,7 +779,7 @@ final class GameRenderer implements GLSurfaceView.Renderer, MapData.Changes {
             if (l < 0) l = 0xF0;
             double spin = (now / 1000.0 + d.id * 0.37) % (Math.PI * 2);
             float bob = (float) (0.1 + 0.05 * Math.sin(now / 500.0 + d.id));
-            ByteBuffer bb = ByteBuffer.allocateDirect(8 * 4 * GameMesher.BYTES).order(ByteOrder.nativeOrder());
+            ByteBuffer bb = scratch(8 * 4 * GameMesher.BYTES);
             int quads;
             if (ic.flat()) {
                 quads = 0;
@@ -897,7 +910,7 @@ final class GameRenderer implements GLSurfaceView.Renderer, MapData.Changes {
 
         Inv.Item held = Inv.heldItem();
         GameIcons.Icon ic = held == null || Hub.versionData == null ? null : icons.get(Hub.versionData.itemId(held.id));
-        ByteBuffer bb = ByteBuffer.allocateDirect(8 * 4 * GameMesher.BYTES).order(ByteOrder.nativeOrder());
+        ByteBuffer bb = scratch(8 * 4 * GameMesher.BYTES);
         int quads = 0;
         // the transform: a small rotation and a position at the lower right of the view, plus swing and bob
         float tx = 0.56f + bobX - sw * 0.25f, ty = -0.52f + bobY + sw * 0.12f, tz = -0.72f - sw * 0.1f;
@@ -1050,7 +1063,7 @@ final class GameRenderer implements GLSurfaceView.Renderer, MapData.Changes {
             int st = MapData.stateAt(c[0], c[1], c[2]);
             float[][] boxes = st > 0 ? Shapes.outline(st) : Shapes.FULL;
             if (boxes.length == 0) boxes = Shapes.FULL;
-            ByteBuffer bb = ByteBuffer.allocateDirect(boxes.length * 6 * 4 * GameMesher.BYTES).order(ByteOrder.nativeOrder());
+            ByteBuffer bb = scratch(boxes.length * 6 * 4 * GameMesher.BYTES);
             int quads = 0;
             float tu = (tile % GameAtlas.GRID) / (float) GameAtlas.GRID, tv = (tile / GameAtlas.GRID) / (float) GameAtlas.GRID, ts = 1f / GameAtlas.GRID;
             for (float[] box : boxes)
