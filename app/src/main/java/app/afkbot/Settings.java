@@ -28,7 +28,7 @@ final class Settings {
 
     static Bot.Config load(SharedPreferences p) {
         Bot.Config c = new Bot.Config();
-        c.address = p.getString("address", "constantiam.net");
+        c.address = p.getString("address", ""); // no server by default: Direct connect, or pick a saved one
         c.offline = p.getBoolean("offline", false);
         c.offlineName = p.getString("offlineName", "");
         c.autoReconnect = p.getBoolean("autoReconnect", true);

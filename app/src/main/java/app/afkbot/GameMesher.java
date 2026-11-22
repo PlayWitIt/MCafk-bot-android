@@ -42,6 +42,8 @@ final class GameMesher {
     private static final int F_KNOWN = 1, F_AIR = 2, F_OPAQUE = 4, F_SAMECULL = 8, F_WATER = 16, F_LAVA = 32,
             F_CHEST = 128, F_WATERLOGGED = 256, F_INVISIBLE = 512, F_TRANSLUCENT = 1024;
     private final int[] info, blockOf, tintOf, chestOf, biomeKind;
+    /** 0 a single chest, 1 the left half of a double chest, 2 the right half. */
+    private final byte[] chestHalf;
     /** Biome colours (grass, foliage, water), or null for the fixed plains colours. */
     GameBiomes biomes;
     private int originX, originY, originZ;
@@ -60,6 +62,7 @@ final class GameMesher {
         blockOf = new int[states];
         tintOf = new int[states];
         chestOf = new int[states];
+        chestHalf = new byte[states];
         biomeKind = new int[states];
         waterTile = Math.max(0, atlas.tile("block/water_still"));
         lavaTile = Math.max(0, atlas.tile("block/lava_still"));
@@ -86,7 +89,12 @@ final class GameMesher {
             if (translucent(id)) i |= F_TRANSLUCENT;
             String chest = TexturePack.chestTexture(id);
             if (chest != null) {
-                int t = atlas.tile("entity/chest/" + chest);
+                // half of a double chest: its own texture (normal_left / normal_right), as the game draws it
+                String type = Shapes.prop(st, "type");
+                int t = -1;
+                if ("left".equals(type) || "right".equals(type)) t = atlas.tile("entity/chest/" + chest + "_" + type);
+                if (t < 0) t = atlas.tile("entity/chest/" + chest);
+                else chestHalf[st] = (byte) ("left".equals(type) ? 1 : 2);
                 if (t >= 0) {
                     i |= F_CHEST;
                     chestOf[st] = t;
@@ -399,9 +407,20 @@ final class GameMesher {
         String facing = Shapes.prop(s, "facing");
         float yaw = "west".equals(facing) ? 90 : "north".equals(facing) ? 180 : "east".equals(facing) ? 270 : 0;
         int l = lightOf(x, y, z);
-        modelBox(x, y, z, yaw, tile, l, 1, 0, 1, 14, 10, 14, 0, 19);
-        modelBox(x, y, z, yaw, tile, l, 1, 9, 1, 14, 5, 14, 0, 0);
-        modelBox(x, y, z, yaw, tile, l, 7, 7, 15, 2, 4, 1, 0, 0);
+        int half = chestHalf[s];
+        if (half == 1) { // the game's double chest, left half: 15 wide, reaching the other half; the latch at the join
+            modelBox(x, y, z, yaw, tile, l, 0, 0, 1, 15, 10, 14, 0, 19);
+            modelBox(x, y, z, yaw, tile, l, 0, 9, 1, 15, 5, 14, 0, 0);
+            modelBox(x, y, z, yaw, tile, l, 0, 7, 15, 1, 4, 1, 0, 0);
+        } else if (half == 2) { // right half
+            modelBox(x, y, z, yaw, tile, l, 1, 0, 1, 15, 10, 14, 0, 19);
+            modelBox(x, y, z, yaw, tile, l, 1, 9, 1, 15, 5, 14, 0, 0);
+            modelBox(x, y, z, yaw, tile, l, 15, 7, 15, 1, 4, 1, 0, 0);
+        } else {
+            modelBox(x, y, z, yaw, tile, l, 1, 0, 1, 14, 10, 14, 0, 19);
+            modelBox(x, y, z, yaw, tile, l, 1, 9, 1, 14, 5, 14, 0, 0);
+            modelBox(x, y, z, yaw, tile, l, 7, 7, 15, 2, 4, 1, 0, 0);
+        }
     }
 
     /** A box in pixel units with Minecraft's "box UV" layout on a 64x64 texture, rotated around the block centre. */
@@ -421,8 +440,8 @@ final class GameMesher {
                 switch (f) {
                     case 0: uu = fx; vv = fz; break;
                     case 1: uu = fx; vv = 1 - fz; break;
-                    case 2: uu = 1 - fx; vv = 1 - fy; break;
-                    case 3: uu = fx; vv = 1 - fy; break;
+                    case 2: uu = fx; vv = 1 - fy; break; // (as the game's model maps them: a double chest's halves
+                    case 3: uu = 1 - fx; vv = 1 - fy; break; // meet without their outer edges' dark border)
                     case 4: uu = 1 - fz; vv = 1 - fy; break;
                     default: uu = fz; vv = 1 - fy; break;
                 }

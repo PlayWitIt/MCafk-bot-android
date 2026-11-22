@@ -99,6 +99,17 @@ public class GlTest {
         PreviewTest.cmd("tp Tester 10.5 -59.5 12.5 135 28");
         Thread.sleep(1500);
         shot(r, b, out + "/gl_close.png", 135, 28, 6000);
+        PreviewTest.cmd("fill 7 -60 11 11 -58 13 air");
+        PreviewTest.cmd("setblock 8 -60 12 minecraft:chest[facing=south,type=right]");
+        PreviewTest.cmd("setblock 9 -60 12 minecraft:chest[facing=south,type=left]");
+        PreviewTest.cmd("setblock 11 -60 11 minecraft:trapped_chest[facing=west,type=right]");
+        PreviewTest.cmd("setblock 11 -60 12 minecraft:trapped_chest[facing=west,type=left]");
+        PreviewTest.cmd("tp Tester 6.5 -60 8.5");
+        Thread.sleep(2000);
+        shot(r, b, out + "/gl_chests.png", -45, 35, 6000);
+        PreviewTest.cmd("tp Tester 8.9 -60 15.5");
+        Thread.sleep(1500);
+        shot(r, b, out + "/gl_chests_front.png", 180, 40, 6000);
         PreviewTest.cmd("tp Tester 3 -60 -16 0 15");
         Thread.sleep(1500);
         // a stand-in player with a "real" skin: a recoloured Steve served from the skin cache, so no network is needed

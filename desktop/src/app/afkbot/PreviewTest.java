@@ -144,6 +144,11 @@ public class PreviewTest {
         cmd("fill -4 -61 10 0 -61 14 minecraft:water");
         cmd("setblock 4 -60 12 minecraft:chest[facing=south]");
         cmd("setblock 6 -60 12 minecraft:copper_chest[facing=south]");
+        // double chests: facing south (left half west of the right half), and facing east
+        cmd("setblock 8 -60 12 minecraft:chest[facing=south,type=right]");
+        cmd("setblock 9 -60 12 minecraft:chest[facing=south,type=left]");
+        cmd("setblock 2 -60 9 minecraft:chest[facing=east,type=left]");
+        cmd("setblock 2 -60 10 minecraft:chest[facing=east,type=right]");
         cmd("fill 8 -60 12 10 -60 12 minecraft:stone_brick_stairs[facing=west]");
         cmd("fill 8 -60 13 10 -60 13 minecraft:smooth_stone_slab");
         cmd("fill -2 -60 4 0 -60 6 minecraft:short_grass");

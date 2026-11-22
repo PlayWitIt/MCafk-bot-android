@@ -670,8 +670,10 @@ final class GameHud extends View {
                         }
                         sprinting = -ky > 0.92f && !sneak; // push all the way forward to sprint
                         if (b != null) {
-                            b.inForward = Math.abs(ky) < 0.2f ? 0 : -ky;
-                            b.inStrafe = Math.abs(kx) < 0.2f ? 0 : -kx;
+                            // a key is either held or not (like WASD): as soon as the stick counts, it's a full press
+                            // (the bot only walks from 0.3, so a light push would show on the stick but not move you)
+                            b.inForward = Math.abs(ky) < 0.2f ? 0 : -Math.signum(ky);
+                            b.inStrafe = Math.abs(kx) < 0.2f ? 0 : -Math.signum(kx);
                             b.inSprint = sprinting;
                         }
                     } else if (pid == lookId) {

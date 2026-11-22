@@ -3051,17 +3051,35 @@ public class MainActivity extends Activity implements Hub.Listener {
 
         LinearLayout sv = card(col);
         sv.addView(text("Server", 16, TEXT, true));
-        sv.addView(label("Address"));
-        EditText addr = edit("constantiam.net", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        sv.addView(label("Direct connect"));
+        final EditText addr = edit("play.example.com", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         addr.setText(cfg.address);
         addr.addTextChangedListener(new SimpleWatcher() {
             @Override
             public void afterTextChanged(Editable s) {
                 cfg.address = s.toString().trim();
                 save();
+                if (serversBox != null) fillServers(addr);
             }
         });
-        sv.addView(addr);
+        LinearLayout ar = new LinearLayout(this);
+        ar.setGravity(Gravity.CENTER_VERTICAL);
+        ar.addView(addr, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        Button saveSrv = smallButton("Save", SURFACE2);
+        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        slp.leftMargin = dp(8);
+        ar.addView(saveSrv, slp);
+        sv.addView(ar);
+        saveSrv.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                saveServer(addr);
+            }
+        });
+        sv.addView(label("Saved servers"));
+        serversBox = new LinearLayout(this);
+        serversBox.setOrientation(LinearLayout.VERTICAL);
+        sv.addView(serversBox);
+        fillServers(addr);
         final EditText offName = edit("Username for offline server", InputType.TYPE_CLASS_TEXT);
         offName.setText(cfg.offlineName);
         offName.addTextChangedListener(new SimpleWatcher() {
@@ -3153,7 +3171,8 @@ public class MainActivity extends Activity implements Hub.Listener {
             statusText.setText(Hub.status);
             statusText.setTextColor(sc == MUTED ? TEXT : sc);
             String name = Auth.signedInName(this);
-            statusSub.setText((cfg.offline ? cfg.offlineName : name != null ? name : "Not signed in") + "  •  " + cfg.address);
+            statusSub.setText((cfg.offline ? cfg.offlineName : name != null ? name : "Not signed in") + "  •  "
+                    + (cfg.address.trim().isEmpty() ? "no server chosen" : cfg.address));
             startStop.setText(running ? "Stop" : "Start AFK");
             boolean needSignIn = !cfg.offline && name == null;
             setupCard.setVisibility(needSignIn && !running ? View.VISIBLE : View.GONE);
@@ -3267,7 +3286,7 @@ public class MainActivity extends Activity implements Hub.Listener {
         haptic(startStop);
         save();
         if (cfg.address.trim().isEmpty()) {
-            toast("Enter the server address in Account first");
+            toast("Choose a server first: Direct connect or a saved one (Account tab)");
             selectTab(T_ACCOUNT);
             return;
         }
@@ -3370,6 +3389,133 @@ public class MainActivity extends Activity implements Hub.Listener {
         signInThread = t;
         t.start();
         onChange();
+    }
+
+    // ---------------------------------------------------------------- saved servers (shared by all your bots)
+
+    private LinearLayout serversBox;
+
+    private java.io.File serversFile() {
+        return new java.io.File(getFilesDir(), "servers.json");
+    }
+
+    /** Your saved servers: [{name, address}]. The first time, the address you had is put on it. */
+    private org.json.JSONArray servers() {
+        java.io.File f = serversFile();
+        try {
+            if (f.exists()) return new org.json.JSONArray(ModStore.read(f));
+        } catch (Exception ignored) {
+        }
+        org.json.JSONArray a = new org.json.JSONArray();
+        try {
+            if (cfg.address != null && !cfg.address.trim().isEmpty())
+                a.put(new org.json.JSONObject().put("name", cfg.address.trim()).put("address", cfg.address.trim()));
+        } catch (org.json.JSONException ignored) {
+        }
+        writeServers(a);
+        return a;
+    }
+
+    private void writeServers(org.json.JSONArray a) {
+        try {
+            Slot.write(serversFile(), a.toString());
+        } catch (java.io.IOException e) {
+            toast("Couldn't save the server list");
+        }
+    }
+
+    private void fillServers(final EditText addr) {
+        serversBox.removeAllViews();
+        final org.json.JSONArray a = servers();
+        if (a.length() == 0) {
+            TextView t = text("None yet: type an address above and tap Save.", 12, MUTED, false);
+            t.setPadding(0, dp(4), 0, 0);
+            serversBox.addView(t);
+            return;
+        }
+        for (int i = 0; i < a.length(); i++) {
+            final org.json.JSONObject o = a.optJSONObject(i);
+            if (o == null) continue;
+            final String address = o.optString("address"), name = o.optString("name", address);
+            boolean current = address.equalsIgnoreCase(cfg.address == null ? "" : cfg.address.trim());
+            LinearLayout r = new LinearLayout(this);
+            r.setGravity(Gravity.CENTER_VERTICAL);
+            r.setPadding(dp(12), dp(10), dp(6), dp(10));
+            r.setBackground(round(current ? (ACCENT & 0x00FFFFFF) | 0x26000000 : SURFACE2, dp(12), current ? ACCENT : STROKE));
+            LinearLayout t = new LinearLayout(this);
+            t.setOrientation(LinearLayout.VERTICAL);
+            t.addView(text(name, 14, TEXT, true));
+            if (!name.equals(address)) t.addView(text(address, 12, MUTED, false));
+            r.addView(t, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+            if (current) r.addView(text("In use  ", 11, ACCENT2, true));
+            TextView del = text("\u2715", 16, MUTED, false);
+            del.setPadding(dp(10), dp(4), dp(10), dp(4));
+            del.setContentDescription("Remove " + name);
+            r.addView(del);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.topMargin = dp(8);
+            serversBox.addView(r, lp);
+            r.setOnClickListener(new View.OnClickListener() {
+                public void onClick(View v) {
+                    addr.setText(address); // (its watcher saves it and redraws the list)
+                    toast("Server: " + name);
+                }
+            });
+            del.setOnClickListener(new View.OnClickListener() {
+                public void onClick(View v) {
+                    confirm("Remove " + name + "?", "It's only taken off this list.", "Remove", new Runnable() {
+                        public void run() {
+                            org.json.JSONArray b = new org.json.JSONArray();
+                            org.json.JSONArray cur = servers();
+                            for (int k = 0; k < cur.length(); k++) {
+                                org.json.JSONObject x = cur.optJSONObject(k);
+                                if (x != null && !x.optString("address").equalsIgnoreCase(address)) b.put(x);
+                            }
+                            writeServers(b);
+                            fillServers(addr);
+                        }
+                    });
+                }
+            });
+        }
+    }
+
+    /** Saves the address in the box to the list, under a name you choose. */
+    private void saveServer(final EditText addr) {
+        final String address = addr.getText().toString().trim();
+        if (address.isEmpty()) {
+            toast("Type the server's address first");
+            return;
+        }
+        final EditText name = edit("Name (optional)", InputType.TYPE_CLASS_TEXT);
+        name.setText(address);
+        name.selectAll();
+        FrameLayout wrap = new FrameLayout(this);
+        wrap.setPadding(dp(20), dp(8), dp(20), 0);
+        wrap.addView(name);
+        new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle("Save " + address)
+                .setView(wrap)
+                .setPositiveButton("Save", new android.content.DialogInterface.OnClickListener() {
+                    public void onClick(android.content.DialogInterface d, int w) {
+                        String n = name.getText().toString().trim();
+                        org.json.JSONArray b = new org.json.JSONArray();
+                        org.json.JSONArray cur = servers();
+                        try {
+                            b.put(new org.json.JSONObject().put("name", n.isEmpty() ? address : n).put("address", address));
+                        } catch (org.json.JSONException ignored) {
+                        }
+                        for (int k = 0; k < cur.length(); k++) { // (saving the same address again renames it)
+                            org.json.JSONObject x = cur.optJSONObject(k);
+                            if (x != null && !x.optString("address").equalsIgnoreCase(address)) b.put(x);
+                        }
+                        writeServers(b);
+                        fillServers(addr);
+                        toast("Saved");
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
     }
 
     private void askBattery() {

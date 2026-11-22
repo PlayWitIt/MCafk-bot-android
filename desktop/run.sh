@@ -27,6 +27,7 @@ case "$mode" in
   live) exec java -cp $OUT:$CP app.afkbot.LiveTest "$@" ;;
   real) exec java -Dafk.cmd=desktop/realsrv/cmd -cp $OUT:$CP app.afkbot.RealTest "$@" ;;
   non) exec java -cp $OUT:$CP app.afkbot.NonTest "$@" ;;
+  stuck) exec java -Dafk.cmd=desktop/realsrv/cmd -cp $OUT:$CP app.afkbot.StuckTest "$@" ;;
   harvest) exec java -Dafk.cmd=desktop/realsrv/cmd -cp $OUT:$CP app.afkbot.HarvestTest "$@" ;;
   slot) exec java -Dafk.cmd=desktop/realsrv/cmd -cp $OUT:$CP app.afkbot.SlotTest "$@" ;;
   nonlive) exec java -cp $OUT:$CP app.afkbot.NonLive "$@" ;;

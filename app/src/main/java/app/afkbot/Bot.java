@@ -2315,9 +2315,9 @@ final class Bot {
                     send(new Buf(id(Proto.P_S_ENTITY_ACTION)).varInt(selfEntityId).varInt(inSneak ? 0 : 1).varInt(0));
                 sneakTicks = 0;
             }
-            if (inSprint != wasSprint && id(Proto.P_S_ENTITY_ACTION) >= 0 && selfEntityId != Integer.MIN_VALUE) {
-                wasSprint = inSprint;
-                int act = proto >= 771 ? (inSprint ? 1 : 2) : (inSprint ? 3 : 4);
+            if (sprintingM != wasSprint && id(Proto.P_S_ENTITY_ACTION) >= 0 && selfEntityId != Integer.MIN_VALUE) {
+                wasSprint = sprintingM; // the sprint itself (it stops when hungry or against a wall), not the key
+                int act = proto >= 771 ? (sprintingM ? 1 : 2) : (sprintingM ? 3 : 4);
                 send(new Buf(id(Proto.P_S_ENTITY_ACTION)).varInt(selfEntityId).varInt(act).varInt(0));
             }
         } else if (wasSneak || wasSprint || lastInputFlags > 0) {
@@ -2327,6 +2327,7 @@ final class Bot {
             sendInputs(false);
             wasSneak = false;
             wasSprint = false;
+            sprintingM = false;
         }
         if (doAction) {
             if (cfg.afkSwing) send(new Buf(id(Proto.P_S_SWING)).varInt(0));
@@ -2356,7 +2357,12 @@ final class Bot {
 
     // Vanilla's player box is built from floats: half width 0.6F / 2 = 0.30000001192..., height 1.8F = 1.79999995...
     // Using 0.3 exactly leaves you 0.000000012 inside a wall you touch, which strict servers reject as moving into a block.
-    private static final double W = 0.6f / 2.0f, H = 1.8f, STEP = 0.6f;
+    private static final double W = 0.6f / 2.0f, H = 1.8f, STEP = 0.6f, H_CROUCH = 1.5f;
+    /** The box's height now: 1.5 while crouching (the game's crouching pose), else 1.8. */
+    private double hNow = H;
+    /** In the crouching pose (set at the end of each tick, as the game does), and how far we've fallen. */
+    private boolean crouchPose;
+    private double fallDistanceM;
 
     /** One 50 ms tick of walking physics. Must hold the lock. Returns onGround. */
     private boolean physicsStep() {
@@ -2376,14 +2382,26 @@ final class Bot {
         // keys are either pressed or not (like WASD); the client then scales input by 0.98
         float f = !drive ? 0 : inForward > 0.3f ? 1 : inForward < -0.3f ? -1 : 0;
         float s = !drive ? 0 : inStrafe > 0.3f ? 1 : inStrafe < -0.3f ? -1 : 0;
-        if (inSneak) {
+        // the game slows you while in the crouching pose (which follows the key a tick later), not while the key is down
+        if (crouchPose && drive) {
             f *= 0.3f;
             s *= 0.3f;
         }
         f *= 0.98f;
         s *= 0.98f;
+        lastF = f;
+        lastS = s;
         inWater = (MapData.flagsAt((int) Math.floor(x), (int) Math.floor(y + 0.4), (int) Math.floor(z)) & 2) != 0;
-        boolean sprint = inSprint && f > 0 && !inSneak && !hCollideM;
+        // sprinting is a state, as in the game: it starts with the key held while moving forward (with food above 6,
+        // not crouching), and stops when you stop moving forward, get hungry, hit a wall head on (brushing one
+        // doesn't count) or go in water
+        boolean forward = f > 1.0E-5;
+        if (!sprintingM) {
+            if (inSprint && forward && GameState.food > 6 && !crouchPose && !inWater && !(hCollideM && !minorHCollideM)) sprintingM = true;
+        } else if (!forward || GameState.food <= 6 || hCollideM && !minorHCollideM || inWater || !drive) {
+            sprintingM = false;
+        }
+        boolean sprint = sprintingM;
         double speed = 0.1 * (sprint ? 1.3 : 1.0);
         // vanilla: acceleration uses the slipperiness of the block below; velocity then decays by slipperiness * 0.91
         String below = Shapes.id(MapData.stateAt((int) Math.floor(x), (int) Math.floor(y - 0.5000001), (int) Math.floor(z)));
@@ -2410,11 +2428,6 @@ final class Bot {
                 }
             }
         }
-        // sneaking stops you walking off edges
-        if (inSneak && onGroundM) {
-            if (!groundBelow(x + vxM, z)) vxM = 0;
-            if (!groundBelow(x, z + vzM)) vzM = 0;
-        }
         if (climbing) { // ladders, vines...: limited fall speed, sneaking holds you in place
             vxM = Math.max(-0.15, Math.min(0.15, vxM));
             vzM = Math.max(-0.15, Math.min(0.15, vzM));
@@ -2423,8 +2436,10 @@ final class Bot {
         }
         // cobweb, berry bush, powder snow scale this tick's movement
         double[] stuck = stuckFactor((int) Math.floor(x), (int) Math.floor(y), (int) Math.floor(z));
+        sneakingMove = inSneak; // crouching keeps you on the edge (the game's maybeBackOffFromEdge)
         if (stuck != null) move(vxM * stuck[0], vyM * stuck[1], vzM * stuck[2]);
         else move(vxM, vyM, vzM);
+        sneakingMove = false;
         if (stuck != null) {
             vxM = vyM = vzM = 0;
         }
@@ -2443,7 +2458,70 @@ final class Bot {
         }
         if (Math.abs(vxM) < 0.003) vxM = 0;
         if (Math.abs(vzM) < 0.003) vzM = 0;
+        // the pose for next tick (the game's updatePlayerPose at the end of the tick): crouching while the key is
+        // down, or when there's no room to stand up
+        boolean want = inSneak;
+        if (!want && crouchPose && collides(x - W + 1e-7, y + 1e-7, z - W + 1e-7, x + W - 1e-7, y + H - 1e-7, z + W - 1e-7)) want = true;
+        crouchPose = want;
+        hNow = crouchPose ? H_CROUCH : H;
         return onGroundM;
+    }
+
+    private boolean sneakingMove;
+    /** Sprinting (the state, not the key), and whether the last wall we hit was only brushed (the game's minor collision). */
+    volatile boolean sprintingM;
+    private boolean minorHCollideM;
+    private float lastF, lastS;
+
+    /**
+     * The game's isHorizontalCollisionMinor: the wall only brushed us (where we went is within 8 degrees of where
+     * the keys point), so a sprint carries on.
+     */
+    private boolean minorCollision(double mx, double mz) {
+        double fy = Math.toRadians(yaw);
+        double sin = Math.sin(fy), cos = Math.cos(fy);
+        double g = lastS * cos - lastF * sin, h = lastF * cos + lastS * sin;
+        double i = g * g + h * h, j = mx * mx + mz * mz;
+        if (i < 1.0E-5F || j < 1.0E-5F) return false;
+        double l = Math.acos(Math.max(-1, Math.min(1, (g * mx + h * mz) / Math.sqrt(i * j))));
+        return l < 0.13962634F;
+    }
+
+    /** Could we drop at least f below the box moved by (dx, dz)? (the game's canFallAtLeast) */
+    private boolean canFallAtLeast(double dx, double dz, double f) {
+        return !collides(x - W + 1.0E-7 + dx, y - f - 1.0E-7, z - W + 1.0E-7 + dz, x + W - 1.0E-7 + dx, y, z + W - 1.0E-7 + dz);
+    }
+
+    /**
+     * Crouching: the move is cut back (in 0.05 steps, each way, then both together) until it no longer takes you over
+     * an edge you could fall more than a step down. Exactly the game's maybeBackOffFromEdge; the velocity stays.
+     */
+    private double[] backOffFromEdge(double dx, double dy, double dz) {
+        double f = STEP;
+        boolean aboveGround = onGroundM || fallDistanceM < f && !canFallAtLeast(0, 0, f - fallDistanceM);
+        if (!(dy <= 0 && aboveGround)) return new double[]{dx, dz};
+        double i = Math.signum(dx) * 0.05, j = Math.signum(dz) * 0.05;
+        while (dx != 0 && canFallAtLeast(dx, 0, f)) {
+            if (Math.abs(dx) <= 0.05) {
+                dx = 0;
+                break;
+            }
+            dx -= i;
+        }
+        while (dz != 0 && canFallAtLeast(0, dz, f)) {
+            if (Math.abs(dz) <= 0.05) {
+                dz = 0;
+                break;
+            }
+            dz -= j;
+        }
+        while (dx != 0 && dz != 0 && canFallAtLeast(dx, dz, f)) {
+            if (Math.abs(dx) <= 0.05) dx = 0;
+            else dx -= i;
+            if (Math.abs(dz) <= 0.05) dz = 0;
+            else dz -= j;
+        }
+        return new double[]{dx, dz};
     }
 
     // ---- drive diagnostics: every 2 s while a direction is held, say what is happening ----
@@ -2571,10 +2649,6 @@ final class Bot {
         return "below=" + (below.isEmpty() ? "?" : below) + " feet=" + (feet.isEmpty() ? "air" : feet) + " head=" + (head.isEmpty() ? "air" : head);
     }
 
-    private boolean groundBelow(double px, double pz) {
-        return collides(px - W, y - 0.6, pz - W, px + W, y - 0.01, pz + W);
-    }
-
     /** Collision boxes of the block at a position (unloaded chunks count as solid so you never walk into the void). */
     private static float[][] boxesAt(int bx, int by, int bz) {
         int st = MapData.stateAt(bx, by, bz);
@@ -2601,6 +2675,11 @@ final class Bot {
      * that a nearby block's top offers, lowest first, and keep the first one that gets us further sideways.
      */
     private void move(double dx, double dy, double dz) {
+        if (sneakingMove) {
+            double[] bo = backOffFromEdge(dx, dy, dz);
+            dx = bo[0];
+            dz = bo[1];
+        }
         boolean wasGround = onGroundM;
         double[] r = collideFrom(x, y, z, dx, dy, dz);
         boolean vColl = r[1] != dy;
@@ -2621,7 +2700,10 @@ final class Bot {
         boolean hx = Math.abs(r[0] - dx) >= 1.0E-5, hz = Math.abs(r[2] - dz) >= 1.0E-5; // Mth.equal
         vColl = r[1] != dy;
         onGroundM = vColl && dy < 0;
+        if (onGroundM) fallDistanceM = 0;
+        else if (r[1] < 0) fallDistanceM -= r[1];
         hCollideM = hx || hz;
+        minorHCollideM = hCollideM && minorCollision(r[0], r[2]);
         if (hx) vxM = 0;
         if (hz) vzM = 0;
         if (vColl) vyM = 0;
@@ -2646,7 +2728,7 @@ final class Bot {
     private float[] stepHeights(double ox, double oy, double oz, double dx, double dz, boolean vColl, float skip) {
         double x0 = Math.min(ox - W, ox - W + dx), x1 = Math.max(ox + W, ox + W + dx);
         double z0 = Math.min(oz - W, oz - W + dz), z1 = Math.max(oz + W, oz + W + dz);
-        double y0 = vColl ? oy : oy - 1.0E-5F, y1 = oy + H + STEP;
+        double y0 = vColl ? oy : oy - 1.0E-5F, y1 = oy + hNow + STEP;
         java.util.TreeSet<Float> out = new java.util.TreeSet<Float>();
         for (int bx = (int) Math.floor(x0); bx <= (int) Math.floor(x1 - 1e-7); bx++)
             for (int by = (int) Math.floor(y0) - 1; by <= (int) Math.floor(y1 - 1e-7); by++)
@@ -2691,7 +2773,7 @@ final class Bot {
 
     private double sweepFrom(double px, double py, double pz, int axis, double d) {
         if (d == 0) return 0;
-        double[] lo = {px - W, py, pz - W}, hi = {px + W, py + H, pz + W};
+        double[] lo = {px - W, py, pz - W}, hi = {px + W, py + hNow, pz + W};
         double[] slo = lo.clone(), shi = hi.clone();
         if (d > 0) shi[axis] += d;
         else slo[axis] += d;
